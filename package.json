@@ -1,8 +1,29 @@
 {
   "name": "work-on-the-moon",
   "version": "0.1.0",
-  "description": "Web launcher + live mirror for Claude Code (and cmux-claude) sessions on your own machine.",
-  "private": false,
+  "description": "Web launcher + live mirror for Claude Code (and cmux-claude) sessions on your own machine. Self-hosted, passkey-protected, zero-config via npx.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cmux",
+    "cmux-claude",
+    "web",
+    "launcher",
+    "passkey",
+    "webauthn",
+    "self-hosted",
+    "remote-development"
+  ],
+  "homepage": "https://github.com/handlecusion/work-on-the-moon#readme",
+  "bugs": {
+    "url": "https://github.com/handlecusion/work-on-the-moon/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/handlecusion/work-on-the-moon.git"
+  },
+  "license": "MIT",
+  "author": "handlecusion",
   "main": "server.js",
   "bin": {
     "wotm": "bin/wotm.js"
@@ -20,11 +41,16 @@
     "routes/",
     "public/",
     "scripts/",
+    "docs/",
+    "LICENSE",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
+  "os": [
+    "darwin"
+  ],
   "dependencies": {
     "express": "^4.19.0",
     "ws": "^8.18.0",

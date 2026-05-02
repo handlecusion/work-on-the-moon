@@ -9,6 +9,11 @@ npx work-on-the-moon
 # → http://localhost:3700  (passkey setup link printed in stdout)
 ```
 
+![cmux-claude session mirrored in browser](docs/screenshots/chat-live.png)
+
+> Live view of a `cmux-claude` session — read-only by default, with optional
+> keystroke forwarding through the cmux Unix socket.
+
 ---
 
 ## English
@@ -43,6 +48,8 @@ npx work-on-the-moon            # listens on 127.0.0.1:3700
 # open the printed /setup?token=... URL once to register a passkey
 # subsequent visits just need the passkey
 ```
+
+![Login screen](docs/screenshots/login.png)
 
 Reset everything (passkeys, sessions, tokens):
 

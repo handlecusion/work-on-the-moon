@@ -24,3 +24,4 @@ build/
 # 임시
 /tmp/
 *.tmp
+.playwright-mcp/
