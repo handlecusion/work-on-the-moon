@@ -30,10 +30,15 @@ async function destroySession(token) {
   });
 }
 
+// `secure` cookies are dropped over http on some browsers (Safari especially),
+// causing a redirect loop on http://localhost. Tie the flag to ORIGIN's scheme
+// so localhost dev works while production HTTPS still gets Secure.
+const COOKIE_SECURE = !(process.env.ORIGIN || '').startsWith('http://');
+
 function setSessionCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: true,
+    secure: COOKIE_SECURE,
     sameSite: 'strict',
     path: '/',
     maxAge: SESSION_TTL_MS

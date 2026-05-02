@@ -41,15 +41,113 @@ keystroke injection.
   `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, or `$CLAUDE_BIN`)
 - A passkey-capable browser
 
-## Quickstart (self-hosted)
+## External access setup
 
-```sh
-npx work-on-the-moon            # listens on 127.0.0.1:3700
-# open the printed /setup?token=... URL once to register a passkey
-# subsequent visits just need the passkey
-```
+`wotm` is meant to be reached from your phone or another laptop, not just the
+machine that runs it. WebAuthn (passkeys) requires a stable hostname with
+HTTPS, and the server itself only listens on `127.0.0.1:3700`. So you need a
+tunnel/proxy that:
+
+1. Gives you a stable public **hostname**
+2. Terminates **TLS** for that hostname
+3. Forwards traffic to `localhost:3700`
+
+Two recommended setups — pick one. Both let you use the **same passkey** across
+all devices that hit the same hostname.
 
 ![Login screen](docs/screenshots/login.png)
+
+### Option A — Cloudflare Tunnel
+
+You bring a domain (or use a free Cloudflare-hosted subdomain), Cloudflare
+handles TLS and routing. No router/firewall changes needed.
+
+```sh
+# 1. install
+brew install cloudflared
+
+# 2. log in (opens browser, pick the zone you own)
+cloudflared tunnel login
+
+# 3. create a named tunnel (saves credentials JSON to ~/.cloudflared/<UUID>.json)
+cloudflared tunnel create wotm
+
+# 4. route a hostname to the tunnel
+cloudflared tunnel route dns wotm wotm.example.com
+```
+
+Create `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: wotm
+credentials-file: /Users/<you>/.cloudflared/<UUID>.json
+ingress:
+  - hostname: wotm.example.com
+    service: http://localhost:3700
+  - service: http_status:404
+```
+
+Run the tunnel (foreground or as a system service):
+
+```sh
+cloudflared tunnel run wotm
+# or: sudo cloudflared service install
+```
+
+Start `wotm` with the public hostname:
+
+```sh
+ORIGIN=https://wotm.example.com \
+RP_ID=wotm.example.com \
+npx work-on-the-moon
+```
+
+Open `https://wotm.example.com` in any browser, register a passkey via the
+`/setup?token=...` URL printed to stdout, done.
+
+### Option B — Tailscale Funnel
+
+No domain needed — Tailscale gives you a `<machine>.<tailnet>.ts.net` hostname
+with managed TLS. `funnel` is public; `serve` is private to your tailnet.
+
+```sh
+# 1. install + log in
+brew install --cask tailscale
+sudo tailscale up
+
+# 2. enable MagicDNS + HTTPS in the admin console:
+#    https://login.tailscale.com/admin/dns  →  toggle MagicDNS, then "Enable HTTPS"
+
+# 3. find your machine's tailnet FQDN
+tailscale status        # look for e.g. mac-mini.tailxxxx.ts.net
+
+# 4. expose port 3700
+tailscale funnel --bg 3700           # PUBLIC (anyone with the URL)
+# or:
+tailscale serve --bg --https=443 http://localhost:3700   # PRIVATE (tailnet devices only)
+```
+
+Start `wotm` with the tailnet hostname:
+
+```sh
+ORIGIN=https://mac-mini.tailxxxx.ts.net \
+RP_ID=mac-mini.tailxxxx.ts.net \
+npx work-on-the-moon
+```
+
+### Local testing only
+
+If you just want to try `wotm` on the same machine without exposing it:
+
+```sh
+npx work-on-the-moon            # defaults to http://localhost:3700
+```
+
+WebAuthn treats `http://localhost` as a secure context, so passkey registration
+works without TLS. **But this passkey is bound to `RP_ID=localhost`** — you
+cannot reuse it from another device, and switching to a tunnel hostname later
+will require re-registering. Treat localhost mode as a test bench, not a
+deployment.
 
 Reset everything (passkeys, sessions, tokens):
 
@@ -57,40 +155,28 @@ Reset everything (passkeys, sessions, tokens):
 npx work-on-the-moon reset
 ```
 
-## Why localhost + passkey?
-
-WebAuthn (passkeys) requires a stable Relying Party ID. `wotm` defaults to
-`RP_ID=localhost` and `ORIGIN=http://localhost:3700`, which the WebAuthn spec
-treats as a secure context **without** TLS. This means:
-
-- **Use `http://localhost:3700` in your browser** — not `127.0.0.1`, not your
-  LAN IP. Passkeys will refuse to register otherwise.
-- A passkey created against `localhost` is bound to your machine; it cannot be
-  reused from another device against the same `localhost` URL.
-- For multi-device access you need to expose the server under a real domain and
-  set `ORIGIN`/`RP_ID` accordingly (e.g. via Cloudflare Tunnel, Tailscale Funnel,
-  or your own reverse proxy). Changing `RP_ID` invalidates existing passkeys.
-
 ## Configuration
 
 | Env var      | Default                  | Notes                                  |
 |--------------|--------------------------|----------------------------------------|
 | `PORT`       | `3700`                   | Listen port                            |
 | `HOST`       | `127.0.0.1`              | Listen interface                       |
-| `ORIGIN`     | `http://localhost:3700`  | WebAuthn expected origin               |
-| `RP_ID`      | `localhost`              | WebAuthn Relying Party ID              |
+| `ORIGIN`     | `http://localhost:3700`  | WebAuthn expected origin (set this for tunnel mode) |
+| `RP_ID`      | `localhost`              | WebAuthn Relying Party ID (set this for tunnel mode) |
 | `CLAUDE_BIN` | autodetected             | Override path to the `claude` binary   |
 
 State lives in `~/.claude-web/data.json` (passkeys, sessions, project history)
-and is created on first run.
+and is created on first run. Changing `RP_ID` invalidates passkeys registered
+under the old value, so settle on the hostname before registering devices.
 
 ## Roadmap
 
-`wotm` currently supports **macOS self-hosted** as its primary environment.
-Planned additions:
+`wotm` currently supports **macOS** as its primary environment, with two
+recommended access modes (Cloudflare Tunnel, Tailscale Funnel). Planned:
 
 - **Linux** support (PTY/path differences, packaging)
-- **Tailscale Funnel** preset for multi-device access without Cloudflare
+- **Multi-origin** mode: pick `RP_ID` per-request from `Host` header so a
+  single instance can serve both LAN and tunnel paths simultaneously
 - **Docker** image for headless servers
 - **Multi-user** mode (today the server assumes a single owner)
 - More **cmux-claude** integration surfaces (workspace switching, surface
