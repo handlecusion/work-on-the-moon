@@ -175,8 +175,6 @@ under the old value, so settle on the hostname before registering devices.
 recommended access modes (Cloudflare Tunnel, Tailscale Funnel). Planned:
 
 - **Linux** support (PTY/path differences, packaging)
-- **Multi-origin** mode: pick `RP_ID` per-request from `Host` header so a
-  single instance can serve both LAN and tunnel paths simultaneously
 - **Docker** image for headless servers
 - **Multi-user** mode (today the server assumes a single owner)
 - More **cmux-claude** integration surfaces (workspace switching, surface

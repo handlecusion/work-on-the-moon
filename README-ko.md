@@ -173,8 +173,6 @@ npx work-on-the-moon reset
 Tailscale Funnel) 제공. 다음을 추가 예정:
 
 - **Linux** 지원 (PTY/경로 차이, 패키징)
-- **멀티 origin** 모드: `Host` 헤더 기반으로 RP_ID per-request 선택해서 한 인스턴스로
-  LAN과 tunnel 경로를 동시 서빙
 - **Docker** 이미지 (헤드리스 서버용)
 - **멀티유저** 모드 (현재는 단일 소유자 가정)
 - **cmux-claude** 연동 확장 (workspace 전환, surface 메타, workspace로 어태치)
