@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web — 패스키 등록</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="center-page">
+  <div class="card">
+    <h1>패스키 등록</h1>
+    <p class="lead">이 기기에 패스키를 등록합니다. 기기 이름을 입력하세요.</p>
+    <input id="deviceName" type="text" placeholder="예: iPhone 15" autocomplete="off" />
+    <div style="height:12px;"></div>
+    <button id="regBtn" class="primary" style="width:100%;">패스키 등록</button>
+    <div id="msg" class="error"></div>
+    <div id="ok" class="notice"></div>
+  </div>
+</div>
+<script src="/static/webauthn.js"></script>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || '';
+  const btn = document.getElementById('regBtn');
+  const nameInput = document.getElementById('deviceName');
+  const msg = document.getElementById('msg');
+  const ok = document.getElementById('ok');
+
+  // Try to suggest a name based on UA
+  function guessName() {
+    const ua = navigator.userAgent;
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/iPad/.test(ua)) return 'iPad';
+    if (/Macintosh/.test(ua)) return 'Mac';
+    if (/Android/.test(ua)) return 'Android';
+    if (/Windows/.test(ua)) return 'Windows';
+    return '';
+  }
+  nameInput.value = guessName();
+
+  if (!token) {
+    msg.textContent = '유효하지 않거나 만료된 링크입니다.';
+    btn.disabled = true;
+  }
+
+  async function register() {
+    btn.disabled = true; msg.textContent = ''; ok.textContent = '';
+    try {
+      const deviceName = (nameInput.value || '').trim() || '기기';
+      const optResp = await fetch('/api/setup/options', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, deviceName })
+      });
+      if (!optResp.ok) {
+        const j = await optResp.json().catch(() => ({}));
+        throw new Error(j.error || '유효하지 않거나 만료된 링크입니다.');
+      }
+      const { options, challengeId } = await optResp.json();
+      const publicKey = WebAuthnUtil.prepareRegOptions(options);
+      const cred = await navigator.credentials.create({ publicKey });
+      if (!cred) throw new Error('등록이 취소되었습니다.');
+      const response = WebAuthnUtil.serializeAttestation(cred);
+      const verifyResp = await fetch('/api/setup/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, response, challengeId, deviceName })
+      });
+      if (!verifyResp.ok) {
+        const j = await verifyResp.json().catch(() => ({}));
+        throw new Error(j.error || '등록 실패');
+      }
+      ok.textContent = '등록 완료. 잠시 후 이동합니다…';
+      setTimeout(() => { location.href = '/'; }, 800);
+    } catch (e) {
+      msg.textContent = e.message || String(e);
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener('click', register);
+})();
+</script>
+</body>
+</html>

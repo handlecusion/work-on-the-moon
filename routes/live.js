@@ -1,0 +1,685 @@
+'use strict';
+
+/**
+ * routes/live.js — bidirectional live attach to a local Claude Code session.
+ *
+ *   GET  /chat-live/:sessionId         → serve chat-live.html (auth)
+ *   GET  /api/live/:sessionId          → metadata JSON for that session
+ *   WS   /ws/live                      → tail + cmux input attach (auth)
+ *
+ * WS protocol:
+ *   client → server :
+ *     {type:'hello', sessionId}
+ *     {type:'send', text}              — forwarded via cmuxClient.sendText
+ *     {type:'send_key', key}           — forwarded via cmuxClient.sendKey
+ *   server → client :
+ *     init / event / meta_update / process_exit / closed / error
+ *
+ * Send messages are routed through the cmux IPC to the surface running the
+ * `claude` CLI for this session's cwd. Echo of the keystroke arrives back via
+ * the jsonl tail (no optimistic rendering).
+ */
+
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const url = require('url');
+const os = require('os');
+const { WebSocketServer } = require('ws');
+
+const session = require('../auth/session');
+const liveSessionScanner = require('../lib/liveSessionScanner');
+const liveTailer = require('../lib/liveTailer');
+const cmuxClient = require('../lib/cmuxClient');
+const { loadEntireTranscript } = require('../lib/jsonlNormalizer');
+
+const router = express.Router();
+
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const META_REFRESH_MS = 10 * 1000;
+const META_DEBOUNCE_MS = 1000;
+const HEARTBEAT_MS = 30 * 1000;
+const MAX_SEND_TEXT_BYTES = 10000;
+const ALLOWED_KEYS = new Set([
+  'enter', 'escape', 'ctrl-c', 'ctrl-d', 'tab', 'up', 'down', 'left', 'right'
+]);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function findLiveEntryBySessionId(list, sessionId) {
+  if (!Array.isArray(list)) return null;
+  for (const entry of list) {
+    if (entry && entry.sessionId === sessionId) return entry;
+  }
+  return null;
+}
+
+function findLiveEntryByCwd(list, cwd) {
+  if (!Array.isArray(list) || !cwd) return null;
+  // list is sorted lastActivityTs desc — first match is the most recent.
+  for (const entry of list) {
+    if (entry && entry.cwd === cwd) return entry;
+  }
+  return null;
+}
+
+function encodeCwd(cwd) {
+  return String(cwd || '').replace(/\//g, '-');
+}
+
+function jsonlPathFor(cwd, sid) {
+  if (!cwd || !sid) return null;
+  return path.join(PROJECTS_DIR, encodeCwd(cwd), sid + '.jsonl');
+}
+
+/**
+ * Best-effort search for a jsonl file whose name matches sessionId, even if
+ * we can't find a live process. The Claude CLI encodes the cwd as a folder
+ * name where every '/' becomes '-'. Without a known cwd we have to scan the
+ * whole projects dir.
+ */
+function findJsonlPathBySessionId(sessionId) {
+  let dirs;
+  try {
+    dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true });
+  } catch (_) {
+    return null;
+  }
+  const fileName = sessionId + '.jsonl';
+  let best = null;
+  let bestMtime = -Infinity;
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const candidate = path.join(PROJECTS_DIR, d.name, fileName);
+    let st;
+    try { st = fs.statSync(candidate); } catch (_) { continue; }
+    const m = st.mtime ? st.mtime.getTime() : 0;
+    if (m > bestMtime) {
+      bestMtime = m;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * Decode an encoded directory name back to a cwd path.
+ *   '-Users-alice-Code-foo' → '/Users/alice/Code/foo'
+ */
+function decodeEncodedCwd(encoded) {
+  if (!encoded) return null;
+  // Replace every '-' that came from a '/' substitution. The original cwd
+  // can't contain hyphens that weren't '/' though we can't know for sure
+  // — best-effort.
+  return '/' + encoded.replace(/^-/, '').split('-').join('/');
+}
+
+function buildMeta(entry, fallback) {
+  if (entry) {
+    return {
+      pid: entry.pid,
+      sessionId: entry.sessionId,
+      cwd: entry.cwd,
+      gitBranch: entry.gitBranch || null,
+      source: entry.source,
+      busy: entry.busy,
+      idleSeconds: entry.idleSeconds,
+      startedAt: entry.startedAt || null,
+      lastActivityTs: entry.lastActivityTs || null,
+      jsonlPath: entry.jsonlPath || null,
+      cmuxAvailable: !!entry.cmuxAvailable,
+      cmuxSurfaceId: entry.cmuxSurfaceId || null,
+      cmuxWorkspaceId: entry.cmuxWorkspaceId || null
+    };
+  }
+  // Fallback: process not found, but we have a jsonl path.
+  return {
+    pid: null,
+    sessionId: fallback.sessionId,
+    cwd: fallback.cwd || null,
+    gitBranch: null,
+    source: null,
+    busy: false,
+    idleSeconds: null,
+    startedAt: null,
+    lastActivityTs: null,
+    jsonlPath: fallback.jsonlPath,
+    cmuxAvailable: false,
+    cmuxSurfaceId: null,
+    cmuxWorkspaceId: null
+  };
+}
+
+/**
+ * Ensure the singleton cmux client is connected. Returns true if connected,
+ * false if cmux is unavailable. Soft-fails — never throws.
+ */
+async function ensureCmuxConnected() {
+  if (cmuxClient.isConnected()) return true;
+  try {
+    await cmuxClient.connect();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP routes
+// ---------------------------------------------------------------------------
+
+router.get('/chat-live/:sessionId', session.requireAuth, (req, res) => {
+  const sid = req.params.sessionId;
+  if (!SESSION_ID_RE.test(sid)) {
+    return res.status(404).send('Not found');
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'chat-live.html'));
+});
+
+// cwd-based entry — used when the running claude process has no resolvable
+// sessionId yet (e.g. `--continue` with no UUID before any message is sent).
+// The :cwd param is URL-decoded by Express; we just need it to look like an
+// absolute path.
+router.get('/chat-live-cwd/:cwd', session.requireAuth, (req, res) => {
+  const cwd = req.params.cwd;
+  if (typeof cwd !== 'string' || !cwd.startsWith('/')) {
+    return res.status(404).send('Not found');
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'chat-live.html'));
+});
+
+router.get('/api/live/:sessionId', session.requireAuth, async (req, res) => {
+  const sid = req.params.sessionId;
+  if (!SESSION_ID_RE.test(sid)) {
+    return res.status(400).json({ error: 'invalid sessionId' });
+  }
+
+  let live;
+  try {
+    live = await liveSessionScanner.scanLive();
+  } catch (e) {
+    return res.status(500).json({ error: 'scanLive failed: ' + e.message });
+  }
+
+  const entry = findLiveEntryBySessionId(live, sid);
+  if (entry) {
+    return res.json(buildMeta(entry, null));
+  }
+
+  // Process not running — but jsonl may still exist for read-only viewing.
+  const jsonlPath = findJsonlPathBySessionId(sid);
+  if (!jsonlPath) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+  // Derive cwd best-effort from the directory name.
+  const dirName = path.basename(path.dirname(jsonlPath));
+  return res.json(buildMeta(null, {
+    sessionId: sid,
+    cwd: decodeEncodedCwd(dirName),
+    jsonlPath
+  }));
+});
+
+// ---------------------------------------------------------------------------
+// WS endpoint
+// ---------------------------------------------------------------------------
+
+function attachWS(server) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    let urlObj;
+    try {
+      urlObj = new url.URL(req.url, 'http://localhost');
+    } catch (_) {
+      return; // let other upgrade handlers (or default) deal with it
+    }
+    if (urlObj.pathname !== '/ws/live') return;
+
+    const sessionRow = session.getSessionForWS(req, urlObj);
+    if (!sessionRow) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req, sessionRow);
+    });
+  });
+
+  wss.on('connection', (ws, req, sessionRow) => {
+    console.log('[live] connection open');
+
+    let attached = false;
+    let attachedSid = null;
+    let attachedCwd = null;
+    let tailerHandle = null;
+    let metaRefreshTimer = null;
+    let metaDebounceTimer = null;
+    let fileWaitTimer = null;
+    let pendingJsonlPath = null;   // set when file doesn't exist yet
+    let lastMeta = null;            // last meta we sent — used when re-emitting init after lazy attach
+    let lastBroadcastBusy = null;
+    let lastBroadcastIdle = null;
+    let lastBroadcastPid = null;
+    // Per-connection cmux state — refreshed on meta poll. surfaceId is what
+    // we forward send/send_key to. cwd is captured for re-resolution.
+    let cmuxState = {
+      available: false,
+      surfaceId: null,
+      workspaceId: null
+    };
+    let isAlive = true;
+
+    function send(obj) {
+      if (ws.readyState !== ws.OPEN) return;
+      try { ws.send(JSON.stringify(obj)); } catch (_) {}
+    }
+
+    function closeWithError(message) {
+      send({ type: 'error', message });
+      send({ type: 'closed', reason: message });
+      try { ws.close(); } catch (_) {}
+    }
+
+    // ── Heartbeat ────────────────────────────────────────────────────
+    const pingInterval = setInterval(() => {
+      if (!isAlive) {
+        try { ws.terminate(); } catch (_) {}
+        return;
+      }
+      isAlive = false;
+      try { ws.ping(); } catch (_) {}
+    }, HEARTBEAT_MS);
+
+    ws.on('pong', () => { isAlive = true; });
+
+    // ── Locate the entry for this connection (sid first, cwd fallback) ──
+    function findEntryForConnection(live) {
+      if (attachedSid) {
+        const e = findLiveEntryBySessionId(live, attachedSid);
+        if (e) return e;
+      }
+      if (attachedCwd) {
+        return findLiveEntryByCwd(live, attachedCwd);
+      }
+      return null;
+    }
+
+    // ── Tailer attach helper ────────────────────────────────────────
+    async function attachTailer(jsonlPath, alreadyReplayed) {
+      if (tailerHandle) return;
+      let firstInit = !!alreadyReplayed;
+      tailerHandle = await liveTailer.attach(jsonlPath, {
+        onInit: (events) => {
+          if (firstInit) { firstInit = false; return; }
+          // File appeared, was truncated, or replaced — re-send full init
+          // using the latest meta we have.
+          send({ type: 'init', meta: lastMeta, transcript: events });
+        },
+        onEvent: (ev) => {
+          if (!ev) return;
+          send(Object.assign({ type: 'event' }, ev));
+        },
+        onMtimeChange: () => {
+          if (metaDebounceTimer) clearTimeout(metaDebounceTimer);
+          metaDebounceTimer = setTimeout(async () => {
+            metaDebounceTimer = null;
+            if (ws.readyState !== ws.OPEN) return;
+            liveSessionScanner.invalidateCache();
+            let live2;
+            try { live2 = await liveSessionScanner.scanLive(); }
+            catch (_) { return; }
+            const e2 = findEntryForConnection(live2);
+            if (!e2) return;
+            // Pick up sid if it just became known (cwd-mode).
+            if (!attachedSid && e2.sessionId) attachedSid = e2.sessionId;
+            const cmuxChanged2 = (!!e2.cmuxAvailable) !== cmuxState.available
+                || (e2.cmuxSurfaceId || null) !== cmuxState.surfaceId
+                || (e2.cmuxWorkspaceId || null) !== cmuxState.workspaceId;
+            if (cmuxChanged2) {
+              cmuxState = {
+                available: !!e2.cmuxAvailable,
+                surfaceId: e2.cmuxSurfaceId || null,
+                workspaceId: e2.cmuxWorkspaceId || null
+              };
+            }
+            if (e2.busy !== lastBroadcastBusy
+                || e2.idleSeconds !== lastBroadcastIdle
+                || cmuxChanged2) {
+              lastBroadcastBusy = e2.busy;
+              lastBroadcastIdle = e2.idleSeconds;
+              send({
+                type: 'meta_update',
+                busy: e2.busy,
+                idleSeconds: e2.idleSeconds,
+                pid: e2.pid,
+                cmuxAvailable: cmuxState.available,
+                cmuxSurfaceId: cmuxState.surfaceId,
+                cmuxWorkspaceId: cmuxState.workspaceId
+              });
+            }
+          }, META_DEBOUNCE_MS);
+        },
+        onClose: () => {
+          send({ type: 'closed', reason: 'transcript file removed' });
+          try { ws.close(); } catch (_) {}
+        }
+      });
+    }
+
+    // ── Wait for the jsonl file to appear, then lazy-attach ──────────
+    // Used when the running claude hasn't written its first line yet, or
+    // when only cwd is known (sid emerges later via scanner).
+    function startFileWaitPoll() {
+      if (fileWaitTimer) return;
+      const POLL_MS = 1500;
+      fileWaitTimer = setInterval(async () => {
+        if (ws.readyState !== ws.OPEN) return;
+        if (tailerHandle) {
+          clearInterval(fileWaitTimer);
+          fileWaitTimer = null;
+          return;
+        }
+        // If sid is still unknown (cwd-mode), re-scan to discover it.
+        if (!attachedSid && attachedCwd) {
+          try {
+            const live = await liveSessionScanner.scanLive();
+            const e = findLiveEntryByCwd(live, attachedCwd);
+            if (e) {
+              lastMeta = buildMeta(e, null);
+              if (e.sessionId) {
+                attachedSid = e.sessionId;
+                if (!pendingJsonlPath) {
+                  pendingJsonlPath = e.jsonlPath || jsonlPathFor(attachedCwd, e.sessionId);
+                }
+              }
+            }
+          } catch (_) { /* keep polling */ }
+        }
+        // If we still have no path candidate, try a whole-tree lookup.
+        if (!pendingJsonlPath && attachedSid) {
+          pendingJsonlPath = findJsonlPathBySessionId(attachedSid);
+        }
+        if (pendingJsonlPath && fs.existsSync(pendingJsonlPath)) {
+          const toAttach = pendingJsonlPath;
+          pendingJsonlPath = null;
+          clearInterval(fileWaitTimer);
+          fileWaitTimer = null;
+          try {
+            // alreadyReplayed=false → first onInit will emit a fresh init
+            // replacing the empty transcript we sent at hello.
+            await attachTailer(toAttach, false);
+          } catch (e) {
+            send({ type: 'error', message: 'tailer attach failed: ' + e.message });
+          }
+        }
+      }, POLL_MS);
+      if (fileWaitTimer.unref) fileWaitTimer.unref();
+    }
+
+    // ── Periodic meta refresh ────────────────────────────────────────
+    function startMetaRefresh() {
+      metaRefreshTimer = setInterval(async () => {
+        if (ws.readyState !== ws.OPEN) return;
+        if (!attachedSid && !attachedCwd) return;
+        let live;
+        try {
+          live = await liveSessionScanner.scanLive();
+        } catch (_) { return; }
+        const entry = findEntryForConnection(live);
+        // Pick up sid if it just became known (cwd-mode).
+        if (entry && !attachedSid && entry.sessionId) {
+          attachedSid = entry.sessionId;
+        }
+        // Keep lastMeta fresh so any future init re-emit carries the right
+        // sessionId / cwd / pid.
+        if (entry) lastMeta = buildMeta(entry, null);
+        if (!entry) {
+          // Process disappeared. Notify once.
+          if (lastBroadcastPid != null) {
+            send({ type: 'process_exit' });
+            lastBroadcastPid = null;
+          }
+          // Also flip cmux to unavailable so the input bar disables.
+          if (cmuxState.available) {
+            cmuxState = { available: false, surfaceId: null, workspaceId: null };
+            send({
+              type: 'meta_update',
+              cmuxAvailable: false,
+              cmuxSurfaceId: null,
+              cmuxWorkspaceId: null
+            });
+          }
+          return;
+        }
+        if (lastBroadcastPid == null) lastBroadcastPid = entry.pid;
+
+        const cmuxChanged = (!!entry.cmuxAvailable) !== cmuxState.available
+            || (entry.cmuxSurfaceId || null) !== cmuxState.surfaceId
+            || (entry.cmuxWorkspaceId || null) !== cmuxState.workspaceId;
+        if (cmuxChanged) {
+          cmuxState = {
+            available: !!entry.cmuxAvailable,
+            surfaceId: entry.cmuxSurfaceId || null,
+            workspaceId: entry.cmuxWorkspaceId || null
+          };
+        }
+
+        // Broadcast a meta_update if busy/idle/pid OR cmux fields changed.
+        if (entry.busy !== lastBroadcastBusy
+            || entry.idleSeconds !== lastBroadcastIdle
+            || entry.pid !== lastBroadcastPid
+            || cmuxChanged) {
+          lastBroadcastBusy = entry.busy;
+          lastBroadcastIdle = entry.idleSeconds;
+          lastBroadcastPid = entry.pid;
+          send({
+            type: 'meta_update',
+            busy: entry.busy,
+            idleSeconds: entry.idleSeconds,
+            pid: entry.pid,
+            cmuxAvailable: cmuxState.available,
+            cmuxSurfaceId: cmuxState.surfaceId,
+            cmuxWorkspaceId: cmuxState.workspaceId
+          });
+        }
+      }, META_REFRESH_MS);
+      if (metaRefreshTimer.unref) metaRefreshTimer.unref();
+    }
+
+    // ── Message handler ──────────────────────────────────────────────
+    ws.on('message', async (raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw.toString('utf8'));
+      } catch (_) {
+        send({ type: 'error', message: 'invalid json' });
+        return;
+      }
+
+      if (!attached) {
+        if (!msg || msg.type !== 'hello') {
+          closeWithError('expected hello as first message');
+          return;
+        }
+        const sidArg = (typeof msg.sessionId === 'string') ? msg.sessionId : null;
+        const cwdArg = (typeof msg.cwd === 'string') ? msg.cwd : null;
+        if (sidArg && !SESSION_ID_RE.test(sidArg)) {
+          closeWithError('invalid sessionId');
+          return;
+        }
+        if (!sidArg && (!cwdArg || !cwdArg.startsWith('/'))) {
+          closeWithError('hello requires sessionId or absolute cwd');
+          return;
+        }
+
+        let live;
+        try {
+          live = await liveSessionScanner.scanLive();
+        } catch (e) {
+          closeWithError('scan failed: ' + e.message);
+          return;
+        }
+
+        // Locate the running claude entry by sid OR cwd.
+        const entry = sidArg
+          ? findLiveEntryBySessionId(live, sidArg)
+          : findLiveEntryByCwd(live, cwdArg);
+
+        // Resolve final identifiers.
+        const resolvedSid = sidArg || (entry && entry.sessionId) || null;
+        const resolvedCwd = (entry && entry.cwd) || cwdArg || null;
+
+        // Compute the best-guess jsonl path.
+        let jsonlPath = null;
+        if (entry && entry.jsonlPath) {
+          jsonlPath = entry.jsonlPath;
+        } else if (resolvedSid && resolvedCwd) {
+          jsonlPath = jsonlPathFor(resolvedCwd, resolvedSid);
+        } else if (resolvedSid) {
+          jsonlPath = findJsonlPathBySessionId(resolvedSid);
+        }
+
+        // Bail only if we can't anchor on anything at all.
+        if (!entry && !jsonlPath) {
+          closeWithError('session not found');
+          return;
+        }
+
+        // Capture entry metadata for meta polling.
+        let meta;
+        if (entry) {
+          meta = buildMeta(entry, null);
+          lastBroadcastBusy = entry.busy;
+          lastBroadcastIdle = entry.idleSeconds;
+          lastBroadcastPid = entry.pid;
+          cmuxState = {
+            available: !!entry.cmuxAvailable,
+            surfaceId: entry.cmuxSurfaceId || null,
+            workspaceId: entry.cmuxWorkspaceId || null
+          };
+        } else {
+          // jsonl-only fallback (process not found, but file exists for sid).
+          const dirName = jsonlPath ? path.basename(path.dirname(jsonlPath)) : null;
+          meta = buildMeta(null, {
+            sessionId: resolvedSid,
+            cwd: resolvedCwd || (dirName ? decodeEncodedCwd(dirName) : null),
+            jsonlPath
+          });
+        }
+
+        attached = true;
+        attachedSid = resolvedSid;
+        attachedCwd = resolvedCwd;
+        lastMeta = meta;
+
+        // Send init synchronously. If the file exists, replay full transcript;
+        // otherwise send empty and let the lazy attach path re-emit init when
+        // the file appears.
+        const fileExists = !!(jsonlPath && fs.existsSync(jsonlPath));
+        const transcript = fileExists ? loadEntireTranscript(jsonlPath) : [];
+        send({ type: 'init', meta, transcript });
+
+        if (fileExists) {
+          try {
+            await attachTailer(jsonlPath, /* alreadyReplayed */ true);
+          } catch (e) {
+            closeWithError('tailer attach failed: ' + e.message);
+            return;
+          }
+        } else {
+          // Either jsonl hasn't been written yet, or sid is still unknown
+          // (cwd-only mode). Poll until we can attach.
+          pendingJsonlPath = jsonlPath;
+          startFileWaitPoll();
+        }
+
+        startMetaRefresh();
+        return;
+      }
+
+      // ── Subsequent messages — cmux input forwarding ─────────────────
+      const type = msg && msg.type;
+
+      if (type === 'send' || type === 'send_key') {
+        if (!cmuxState.available || !cmuxState.surfaceId) {
+          send({ type: 'error', message: 'cmux 연동이 비활성 상태입니다.' });
+          return;
+        }
+        const ok = await ensureCmuxConnected();
+        if (!ok) {
+          send({ type: 'error', message: 'cmux 연결이 끊어졌습니다.' });
+          return;
+        }
+
+        if (type === 'send') {
+          const text = msg.text;
+          if (typeof text !== 'string') {
+            send({ type: 'error', message: 'send: text must be a string' });
+            return;
+          }
+          if (Buffer.byteLength(text, 'utf8') > MAX_SEND_TEXT_BYTES) {
+            send({ type: 'error', message: 'send: text too large (max 10000 bytes)' });
+            return;
+          }
+          try {
+            await cmuxClient.sendText(cmuxState.surfaceId, text);
+          } catch (err) {
+            send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
+          }
+          return;
+        }
+
+        // type === 'send_key'
+        const key = msg.key;
+        if (typeof key !== 'string' || !ALLOWED_KEYS.has(key)) {
+          send({ type: 'error', message: 'send_key: key must be one of ' +
+            Array.from(ALLOWED_KEYS).join(', ') });
+          return;
+        }
+        try {
+          await cmuxClient.sendKey(cmuxState.surfaceId, key);
+        } catch (err) {
+          send({ type: 'error', message: '키 전송 실패: ' + (err && err.message ? err.message : String(err)) });
+        }
+        return;
+      }
+
+      send({ type: 'error', message: 'unknown message type: ' + type });
+    });
+
+    ws.on('close', () => {
+      console.log('[live] connection close sid=%s cwd=%s',
+        attachedSid || '(no sid)',
+        attachedCwd || '(no cwd)');
+      clearInterval(pingInterval);
+      if (metaRefreshTimer) clearInterval(metaRefreshTimer);
+      if (metaDebounceTimer) clearTimeout(metaDebounceTimer);
+      if (fileWaitTimer) { clearInterval(fileWaitTimer); fileWaitTimer = null; }
+      if (tailerHandle) {
+        try { tailerHandle.detach(); } catch (_) {}
+        tailerHandle = null;
+      }
+    });
+
+    ws.on('error', (err) => {
+      console.error('[live] ws error:', err && err.message);
+      clearInterval(pingInterval);
+      if (metaRefreshTimer) clearInterval(metaRefreshTimer);
+      if (metaDebounceTimer) clearTimeout(metaDebounceTimer);
+      if (fileWaitTimer) { clearInterval(fileWaitTimer); fileWaitTimer = null; }
+      if (tailerHandle) {
+        try { tailerHandle.detach(); } catch (_) {}
+        tailerHandle = null;
+      }
+    });
+  });
+
+  return wss;
+}
+
+module.exports = { router, attachWS };

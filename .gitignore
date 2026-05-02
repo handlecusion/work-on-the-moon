@@ -1,0 +1,26 @@
+node_modules/
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 로컬 데이터 / 시크릿 (사용자 홈 ~/.claude-web/ 으로 분리됨)
+.env
+.env.local
+.env.*.local
+
+# 빌드 산출물 (현재 없음, 향후 대비)
+dist/
+build/
+.cache/
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 임시
+/tmp/
+*.tmp

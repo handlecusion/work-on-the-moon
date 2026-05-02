@@ -1,0 +1,37 @@
+{
+  "name": "work-on-the-moon",
+  "version": "0.1.0",
+  "description": "Web launcher + live mirror for Claude Code (and cmux-claude) sessions on your own machine.",
+  "private": false,
+  "main": "server.js",
+  "bin": {
+    "wotm": "bin/wotm.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "reset": "node server.js reset",
+    "postinstall": "node -e \"const f=require('path').join(__dirname,'node_modules/node-pty/prebuilds',process.platform+'-'+process.arch,'spawn-helper');try{require('fs').chmodSync(f,0o755)}catch(e){}\""
+  },
+  "files": [
+    "bin/",
+    "server.js",
+    "auth/",
+    "lib/",
+    "routes/",
+    "public/",
+    "scripts/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "ws": "^8.18.0",
+    "node-pty": "^1.0.0",
+    "@simplewebauthn/server": "^9.0.3",
+    "cookie-parser": "^1.4.6",
+    "qrcode": "^1.5.3",
+    "uuid": "^9.0.1"
+  }
+}

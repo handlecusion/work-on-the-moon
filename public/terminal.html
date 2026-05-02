@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>Claude Web — Terminal</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+<style>
+  body { overflow: hidden; }
+  .term-host { position: relative; flex: 1; min-height: 0; }
+  .term-host .xterm { height: 100%; padding: 8px 6px; }
+</style>
+</head>
+<body class="term-page">
+<div class="topbar">
+  <div class="title"><a href="/" style="color:var(--fg);">Claude</a><span class="path" id="pathLabel"></span></div>
+  <div class="actions">
+    <a href="/devices">기기 관리</a>
+    <button id="killBtn" class="danger">세션 종료</button>
+  </div>
+</div>
+<div class="term-host">
+  <div id="term"></div>
+  <input id="kbd" class="hidden-input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" inputmode="text" />
+</div>
+<div id="banner" class="banner" style="display:none;"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+<script>
+(function () {
+  // --- project name from /session/:name ---
+  const m = location.pathname.match(/^\/session\/([^\/]+)\/?$/);
+  if (!m) { document.body.innerHTML = '<div class="center-page"><div class="card"><h1>잘못된 경로</h1></div></div>'; return; }
+  const project = decodeURIComponent(m[1]);
+  document.getElementById('pathLabel').textContent = '~/Code/' + project;
+  document.title = 'Claude — ' + project;
+
+  // --- xterm setup ---
+  const FONT_MIN = 8, FONT_MAX = 28, FONT_DEFAULT = 14;
+  let fontSize = parseInt(localStorage.getItem('cw-font'), 10);
+  if (!fontSize || fontSize < FONT_MIN || fontSize > FONT_MAX) fontSize = FONT_DEFAULT;
+
+  const term = new Terminal({
+    fontSize,
+    fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+    cursorBlink: true,
+    convertEol: false,
+    scrollback: 5000,
+    allowProposedApi: true,
+    theme: {
+      background: '#000000',
+      foreground: '#e6edf3',
+      cursor: '#e6edf3',
+      cursorAccent: '#000000',
+      selectionBackground: '#3a4452'
+    }
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  try { term.loadAddon(new WebLinksAddon.WebLinksAddon()); } catch (_) {}
+  term.open(document.getElementById('term'));
+  setTimeout(() => { try { fit.fit(); } catch (_) {} }, 0);
+
+  // --- WS connection with single-retry reconnect ---
+  let ws = null;
+  let reconnectTimer = null;
+  let didRetry = false;
+  let intentionalClose = false;
+  const banner = document.getElementById('banner');
+
+  function showBanner(text) {
+    banner.textContent = text;
+    banner.style.display = text ? 'block' : 'none';
+  }
+
+  function sendStart() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'start',
+      project,
+      cols: term.cols,
+      rows: term.rows
+    }));
+  }
+
+  function connect() {
+    showBanner('');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const u = proto + '://' + location.host + '/ws/terminal';
+    ws = new WebSocket(u);
+    ws.addEventListener('open', () => {
+      didRetry = false;
+      sendStart();
+    });
+    ws.addEventListener('message', (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === 'output') {
+        term.write(msg.data);
+      } else if (msg.type === 'exit') {
+        term.write('\r\n\x1b[33m[세션이 종료되었습니다 (code=' + msg.code + ')]\x1b[0m\r\n');
+      } else if (msg.type === 'error') {
+        term.write('\r\n\x1b[31m[오류] ' + (msg.message || '') + '\x1b[0m\r\n');
+      }
+    });
+    ws.addEventListener('close', (ev) => {
+      if (intentionalClose) return;
+      if (ev.code === 4401 || ev.code === 1008) {
+        location.href = '/login';
+        return;
+      }
+      if (!didRetry) {
+        didRetry = true;
+        showBanner('연결이 끊어졌습니다. 재연결 중…');
+        reconnectTimer = setTimeout(() => connect(), 2000);
+      } else {
+        showBanner('연결이 끊어졌습니다. 페이지를 새로고침 해주세요.');
+      }
+    });
+    ws.addEventListener('error', () => { /* close handler will deal with it */ });
+  }
+
+  // --- input ---
+  term.onData((data) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'input', data }));
+    }
+  });
+
+  // --- resize ---
+  function doResize() {
+    try { fit.fit(); } catch (_) {}
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  }
+  window.addEventListener('resize', () => {
+    clearTimeout(window.__rzT);
+    window.__rzT = setTimeout(doResize, 100);
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      clearTimeout(window.__rzT);
+      window.__rzT = setTimeout(doResize, 100);
+    });
+  }
+
+  // --- pinch-zoom font scaling ---
+  const host = document.querySelector('.term-host');
+  let pinchActive = false;
+  let pinchStartDist = 0;
+  let pinchStartFont = fontSize;
+
+  function dist(touches) {
+    const a = touches[0], b = touches[1];
+    const dx = a.clientX - b.clientX, dy = a.clientY - b.clientY;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  host.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      pinchActive = true;
+      pinchStartDist = dist(e.touches);
+      pinchStartFont = fontSize;
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  host.addEventListener('touchmove', (e) => {
+    if (pinchActive && e.touches.length === 2) {
+      const d = dist(e.touches);
+      if (pinchStartDist > 0) {
+        const ratio = d / pinchStartDist;
+        let newSize = Math.round(pinchStartFont * ratio);
+        if (newSize < FONT_MIN) newSize = FONT_MIN;
+        if (newSize > FONT_MAX) newSize = FONT_MAX;
+        if (newSize !== fontSize) {
+          fontSize = newSize;
+          term.options.fontSize = fontSize;
+          localStorage.setItem('cw-font', String(fontSize));
+          doResize();
+        }
+      }
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  host.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) pinchActive = false;
+  });
+  host.addEventListener('touchcancel', () => { pinchActive = false; });
+
+  // --- mobile keyboard: tapping the terminal focuses a hidden input ---
+  const kbd = document.getElementById('kbd');
+  function isMobile() {
+    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  }
+  if (isMobile()) {
+    host.addEventListener('click', (e) => {
+      // Only focus the hidden input if user tapped (to summon keyboard) and isn't selecting
+      const sel = window.getSelection && window.getSelection();
+      if (sel && String(sel) ) return; // user is selecting text
+      kbd.focus({ preventScroll: true });
+    });
+    // Forward typed characters and special keys from hidden input to xterm
+    kbd.addEventListener('input', (e) => {
+      const v = kbd.value;
+      if (v) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data: v }));
+        }
+        kbd.value = '';
+      }
+    });
+    kbd.addEventListener('keydown', (e) => {
+      // Send Enter/Backspace/Tab/Esc/arrows directly
+      const map = {
+        'Enter': '\r',
+        'Backspace': '\x7f',
+        'Tab': '\t',
+        'Escape': '\x1b',
+        'ArrowUp': '\x1b[A',
+        'ArrowDown': '\x1b[B',
+        'ArrowRight': '\x1b[C',
+        'ArrowLeft': '\x1b[D'
+      };
+      if (map[e.key]) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data: map[e.key] }));
+        }
+        e.preventDefault();
+      }
+    });
+  } else {
+    // Desktop: focus xterm directly
+    setTimeout(() => term.focus(), 50);
+    host.addEventListener('click', () => term.focus());
+  }
+
+  // --- kill session button ---
+  document.getElementById('killBtn').addEventListener('click', () => {
+    if (!confirm('세션을 종료하시겠습니까? (claude 프로세스가 중단됩니다)')) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'kill' }));
+    }
+    intentionalClose = true;
+    setTimeout(() => { location.href = '/'; }, 200);
+  });
+
+  // initial connect
+  connect();
+})();
+</script>
+</body>
+</html>

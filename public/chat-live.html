@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
+<style>
+  /* ── chat-live page-local styles ───────────────────────────────────── */
+  .live-load-earlier {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--fg-dim);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 150ms;
+  }
+  .live-load-earlier:hover { background: var(--bg-elev-3); color: var(--fg); }
+  .live-load-earlier:disabled { opacity: 0.7; cursor: progress; }
+  .live-load-earlier i, .live-load-earlier svg { width: 14px; height: 14px; }
+
+  .live-streaming-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  .live-streaming-indicator i, .live-streaming-indicator svg {
+    width: 14px;
+    height: 14px;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    line-height: 1.4;
+  }
+  .live-source-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    line-height: 1.4;
+  }
+  .chat-header-cwd {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60ch;
+  }
+  .live-subheader {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+    font-size: 12px;
+    color: var(--fg-dim);
+    flex-wrap: wrap;
+  }
+  .live-subheader .meta-pid {
+    font-family: var(--mono);
+  }
+  .live-subheader .meta-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+  }
+  .live-subheader .meta-status.busy { color: var(--accent); border-color: var(--accent); }
+  .live-subheader .meta-status.idle { color: var(--success); border-color: var(--success); }
+  .live-subheader .meta-status .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+  }
+  /* Override the global hint behaviour: chat-live always shows the cmux
+     status hint (mobile-first). It's a different signal than chat.html's
+     desktop-only keyboard tip. */
+  .chat-input-hint.live-cmux-hint {
+    display: block;
+    margin-top: 6px;
+  }
+  .chat-input-hint.live-cmux-hint.unavailable {
+    color: var(--danger);
+  }
+</style>
+</head>
+<body class="chat-page live-page">
+
+<!-- ── Header ─────────────────────────────────────────────────── -->
+<header class="chat-header" id="chatHeader">
+  <div class="chat-header-inner">
+    <div class="chat-header-left">
+      <a href="/" class="chat-back-btn" id="backBtn" aria-label="홈으로">
+        <i data-lucide="chevron-left"></i>
+      </a>
+      <span class="chat-project-name" id="projectNameLabel">—</span>
+      <span class="live-badge" id="liveBadge">라이브</span>
+      <span class="live-source-pill" id="liveSourcePill" hidden>—</span>
+      <span class="conn-dot" id="connDot" data-state="connecting" aria-hidden="true"></span>
+    </div>
+
+    <div class="chat-header-center">
+      <div class="chat-busy-indicator" id="busyIndicator">
+        <span class="spin"><i data-lucide="loader-2"></i></span>
+        <span class="busy-label">사용 중…</span>
+      </div>
+    </div>
+
+    <div class="chat-header-right">
+      <!-- intentionally empty for read-only -->
+    </div>
+  </div>
+</header>
+
+<!-- ── Sub-header (cwd + pid) ─────────────────────────────────── -->
+<div class="live-subheader" id="liveSubheader">
+  <span class="chat-header-cwd" id="liveCwd" title=""></span>
+  <span class="meta-pid" id="livePid"></span>
+  <span class="meta-pid" id="liveStartedAt"></span>
+  <span class="meta-status idle" id="liveStatus">
+    <span class="dot"></span>
+    <span class="label">대기 중</span>
+  </span>
+</div>
+
+<!-- ── Messages area ──────────────────────────────────────────── -->
+<main class="chat-messages" id="chatMessages" aria-live="polite">
+  <div class="chat-messages-inner">
+    <div class="chat-empty" id="emptyState">
+      <i data-lucide="messages-square"></i>
+      <span>전사 기록을 불러오는 중…</span>
+    </div>
+  </div>
+</main>
+
+<!-- ── Scroll-to-bottom button ────────────────────────────────── -->
+<button class="chat-scroll-btn" id="scrollBtn" aria-label="최신 메시지로">
+  <i data-lucide="arrow-down"></i>
+  <span>최신</span>
+</button>
+
+<!-- ── Toast ──────────────────────────────────────────────────── -->
+<div class="chat-toast" id="chatToast" role="alert" aria-live="assertive">
+  <i data-lucide="alert-circle" id="chatToastIcon"></i>
+  <span id="chatToastText"></span>
+</div>
+
+<!-- ── Disconnect banner ──────────────────────────────────────── -->
+<div class="chat-disconnect-banner" id="disconnectBanner" style="display:none;">
+  <i data-lucide="wifi-off"></i>
+  <span>연결이 끊어졌습니다. 새로고침하세요.</span>
+  <button id="refreshBtn">새로고침</button>
+</div>
+
+<!-- ── Input bar (cmux-routed) ────────────────────────────────── -->
+<footer class="chat-input-bar">
+  <div class="chat-input-inner">
+    <textarea
+      id="liveTextarea"
+      class="chat-textarea"
+      placeholder="cmux 세션에 메시지 보내기…"
+      rows="1"
+      aria-label="메시지 입력"
+      disabled
+    ></textarea>
+    <button id="liveSendBtn" class="chat-send-btn" aria-label="전송" disabled>
+      <i data-lucide="send"></i>
+    </button>
+  </div>
+  <div class="chat-input-hint live-cmux-hint" id="liveCmuxStatus">연결 중…</div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
+<script src="/static/chat-live.js?v=20260502c"></script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web — 로그인</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="center-page">
+  <div class="card">
+    <h1>Claude Web</h1>
+    <p class="lead">패스키로 로그인하세요.</p>
+    <button id="loginBtn" class="primary" style="width:100%;">Face ID로 로그인</button>
+    <div id="msg" class="error"></div>
+    <pre id="debug" style="display:none;font-size:11px;color:var(--fg-dim);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto;font-family:var(--mono);"></pre>
+  </div>
+</div>
+<script src="/static/webauthn.js"></script>
+<script>
+(function () {
+  const btn = document.getElementById('loginBtn');
+  const msg = document.getElementById('msg');
+  const dbg = document.getElementById('debug');
+
+  function logDbg(line) {
+    dbg.style.display = 'block';
+    dbg.textContent += line + '\n';
+  }
+
+  async function login() {
+    btn.disabled = true;
+    msg.textContent = '';
+    dbg.textContent = '';
+    let step = 'init';
+    try {
+      step = 'navigator.credentials check';
+      logDbg('[1] navigator.credentials = ' + (typeof navigator.credentials));
+      if (!navigator.credentials || typeof navigator.credentials.get !== 'function') {
+        throw new Error('이 브라우저는 WebAuthn(navigator.credentials.get)을 지원하지 않습니다. Safari/Chrome 최신 버전을 사용하세요.');
+      }
+      logDbg('[1] OK');
+
+      step = 'fetch options';
+      const optResp = await fetch('/api/auth/login/options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      logDbg('[2] options HTTP ' + optResp.status);
+      if (!optResp.ok) {
+        const j = await optResp.json().catch(() => ({}));
+        throw new Error(j.error || '로그인 옵션 요청 실패');
+      }
+      const data = await optResp.json();
+      const options = data.options;
+      const challengeId = data.challengeId;
+      logDbg('[2] keys=' + Object.keys(options).join(',') + ' allowCreds=' + (Array.isArray(options.allowCredentials) ? options.allowCredentials.length : 'none'));
+
+      step = 'WebAuthnUtil check';
+      if (!window.WebAuthnUtil) throw new Error('WebAuthnUtil 미로딩 — /static/webauthn.js 404 가능성');
+      logDbg('[3] WebAuthnUtil OK');
+
+      step = 'prepareAuthOptions';
+      const publicKey = WebAuthnUtil.prepareAuthOptions(options);
+      logDbg('[4] publicKey ready (challenge bytes=' + (publicKey.challenge && publicKey.challenge.byteLength) + ')');
+
+      step = 'navigator.credentials.get';
+      const cred = await navigator.credentials.get({ publicKey });
+      logDbg('[5] cred = ' + (cred ? cred.type + ':' + cred.id.slice(0,16) : 'null'));
+      if (!cred) throw new Error('인증이 취소되었습니다.');
+
+      step = 'serializeAssertion';
+      const response = WebAuthnUtil.serializeAssertion(cred);
+      logDbg('[6] serialized OK');
+
+      step = 'verify';
+      const verifyResp = await fetch('/api/auth/login/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ response, challengeId })
+      });
+      logDbg('[7] verify HTTP ' + verifyResp.status);
+      if (!verifyResp.ok) {
+        const j = await verifyResp.json().catch(() => ({}));
+        throw new Error(j.error || '인증 실패');
+      }
+      logDbg('[7] redirect /');
+      location.href = '/';
+    } catch (e) {
+      msg.textContent = '[' + step + '] ' + (e.message || String(e));
+      logDbg('ERR @ ' + step + ': ' + (e.name || 'Error') + ' — ' + e.message);
+      if (e.stack) logDbg('STACK:\n' + e.stack);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener('click', login);
+})();
+</script>
+</body>
+</html>

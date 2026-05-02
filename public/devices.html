@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web — 기기 관리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="title"><a href="/" style="color:var(--fg);">Claude Web</a> · 기기 관리</div>
+  <div class="actions">
+    <a href="/">홈</a>
+    <button id="logoutBtn">로그아웃</button>
+  </div>
+</div>
+<div class="container">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <h2 style="margin:0;font-size:18px;flex:1;">등록된 패스키</h2>
+    <button id="inviteBtn" class="primary">기기 추가</button>
+  </div>
+
+  <div id="list" class="device-list"></div>
+
+  <div id="invite" class="invite-box" style="display:none;">
+    <div style="font-weight:600;margin-bottom:6px;">새 기기 등록 링크 (15분 유효)</div>
+    <div class="url-row">
+      <input id="inviteUrl" type="text" readonly />
+      <button id="copyBtn">복사</button>
+    </div>
+    <img id="inviteQr" alt="QR" />
+    <div id="copyMsg" class="notice" style="text-align:center;"></div>
+  </div>
+
+  <div id="msg" class="error"></div>
+</div>
+<script>
+(function () {
+  const list = document.getElementById('list');
+  const inviteBtn = document.getElementById('inviteBtn');
+  const inviteBox = document.getElementById('invite');
+  const inviteUrl = document.getElementById('inviteUrl');
+  const inviteQr = document.getElementById('inviteQr');
+  const copyBtn = document.getElementById('copyBtn');
+  const copyMsg = document.getElementById('copyMsg');
+  const msg = document.getElementById('msg');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString('ko-KR'); } catch (_) { return iso; }
+  }
+
+  async function load() {
+    list.innerHTML = '<div class="empty">불러오는 중…</div>';
+    try {
+      const r = await fetch('/api/devices');
+      if (r.status === 401) { location.href = '/login'; return; }
+      const j = await r.json();
+      const items = j.passkeys || [];
+      if (!items.length) {
+        list.innerHTML = '<div class="empty">등록된 패스키가 없습니다.</div>';
+        return;
+      }
+      const html = items.map(p =>
+        '<div class="device-row">' +
+          '<div class="info">' +
+            '<div class="name">' + escapeHtml(p.name || '기기') + '</div>' +
+            '<div class="meta">생성: ' + escapeHtml(fmtDate(p.createdAt)) +
+              ' · 마지막 사용: ' + escapeHtml(fmtDate(p.lastUsedAt)) + '</div>' +
+          '</div>' +
+          '<button class="danger" data-id="' + escapeHtml(p.id) + '">삭제</button>' +
+        '</div>'
+      ).join('');
+      list.innerHTML = html;
+      list.querySelectorAll('button.danger').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('이 패스키를 삭제하시겠습니까?')) return;
+          const id = btn.getAttribute('data-id');
+          const r2 = await fetch('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
+          if (r2.ok) load();
+          else msg.textContent = '삭제 실패';
+        });
+      });
+    } catch (e) {
+      list.innerHTML = '';
+      msg.textContent = e.message || String(e);
+    }
+  }
+
+  inviteBtn.addEventListener('click', async () => {
+    msg.textContent = ''; copyMsg.textContent = '';
+    inviteBtn.disabled = true;
+    try {
+      const r = await fetch('/api/devices/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || '발급 실패'); }
+      const { url, qr } = await r.json();
+      inviteUrl.value = url;
+      if (qr) { inviteQr.src = qr; inviteQr.style.display = 'block'; }
+      else { inviteQr.removeAttribute('src'); inviteQr.style.display = 'none'; }
+      inviteBox.style.display = 'block';
+    } catch (e) {
+      msg.textContent = e.message || String(e);
+    } finally {
+      inviteBtn.disabled = false;
+    }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl.value);
+      copyMsg.textContent = '복사됨';
+      setTimeout(() => { copyMsg.textContent = ''; }, 1500);
+    } catch (_) {
+      inviteUrl.select(); document.execCommand('copy');
+      copyMsg.textContent = '복사됨';
+      setTimeout(() => { copyMsg.textContent = ''; }, 1500);
+    }
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+    location.href = '/login';
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

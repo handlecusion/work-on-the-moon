@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="title">Claude Web</div>
+  <div class="actions">
+    <a href="/devices">기기 관리</a>
+    <button id="logoutBtn">로그아웃</button>
+  </div>
+</div>
+
+<div id="homeToastSlot"></div>
+
+<main class="home-main">
+  <section class="session-section" id="recentSection">
+    <div class="session-section-header">최근 대화</div>
+    <div class="session-section-list" id="recentList"></div>
+  </section>
+  <section class="session-section" id="localSection">
+    <div class="session-section-header">로컬 세션</div>
+    <div class="session-section-list" id="localList"></div>
+  </section>
+  <section class="session-section" id="allSection">
+    <div class="session-section-header">모든 프로젝트</div>
+    <div class="session-section-list" id="allList"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="/static/index.js?v=20260502b"></script>
+</body>
+</html>

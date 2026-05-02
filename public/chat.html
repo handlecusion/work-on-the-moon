@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#101010" />
+<title>Claude Web — Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
+</head>
+<body class="chat-page">
+
+<!-- ── Header ─────────────────────────────────────────────────── -->
+<header class="chat-header" id="chatHeader">
+  <div class="chat-header-inner">
+    <div class="chat-header-left">
+      <a href="/" class="chat-back-btn" id="backBtn" aria-label="홈으로">
+        <i data-lucide="chevron-left"></i>
+      </a>
+      <button class="chat-project-switcher" id="projectSwitcherBtn" aria-haspopup="menu" aria-expanded="false" aria-label="프로젝트 전환">
+        <span class="chat-project-name" id="projectNameLabel"></span>
+        <i data-lucide="chevrons-up-down" aria-hidden="true"></i>
+      </button>
+
+      <!-- Account chip (populated by auth_status event) -->
+      <span class="account-chip" id="accountChip" role="button" tabindex="0" aria-label="계정 정보" aria-haspopup="true" aria-expanded="false">
+        <i data-lucide="user"></i>
+        <span class="account-chip-email" id="accountChipEmail">—</span>
+      </span>
+
+      <span class="conn-dot" id="connDot" data-state="connecting" aria-hidden="true"></span>
+    </div>
+
+    <div class="chat-header-center">
+      <div class="chat-busy-indicator" id="busyIndicator">
+        <span class="spin"><i data-lucide="loader-2"></i></span>
+        <span class="busy-label">응답 중…</span>
+      </div>
+    </div>
+
+    <div class="chat-header-right">
+      <button class="chat-menu-btn" id="menuBtn" aria-label="메뉴" aria-haspopup="true" aria-expanded="false">
+        <i data-lucide="more-horizontal"></i>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Popover backdrop + menu ────────────────────────────────── -->
+<div class="chat-popover-backdrop" id="popoverBackdrop" style="display:none;"></div>
+<div class="chat-popover" id="chatPopover" role="menu">
+  <button class="chat-popover-item" id="newChatBtn" role="menuitem">
+    <i data-lucide="plus"></i>
+    <span class="item-label">새 대화</span>
+  </button>
+  <a href="/devices" class="chat-popover-item" role="menuitem">
+    <i data-lucide="smartphone"></i>
+    <span class="item-label">기기 관리</span>
+  </a>
+  <a href="#" id="terminalLink" class="chat-popover-item" role="menuitem">
+    <i data-lucide="terminal"></i>
+    <span class="item-label">Raw 터미널</span>
+    <span class="item-note">(deprecated)</span>
+  </a>
+  <div class="chat-popover-divider"></div>
+  <button class="chat-popover-item danger" id="logoutBtn" role="menuitem">
+    <i data-lucide="log-out"></i>
+    <span class="item-label">로그아웃</span>
+  </button>
+</div>
+
+<!-- ── Account chip popover ───────────────────────────────────── -->
+<div class="account-chip-popover" id="accountChipPopover" role="dialog" aria-label="계정 정보">
+  <div class="account-chip-popover-row">
+    <i data-lucide="user"></i>
+    <div class="account-chip-popover-info">
+      <div class="account-chip-popover-email" id="acpEmail">—</div>
+      <div class="account-chip-popover-org" id="acpOrg"></div>
+      <div class="account-chip-popover-sub" id="acpSub"></div>
+    </div>
+  </div>
+  <div class="account-chip-popover-divider"></div>
+  <button class="account-chip-popover-swap-btn" id="acpSwapBtn" aria-label="계정 전환">
+    <i data-lucide="refresh-cw"></i>
+    계정 전환
+  </button>
+</div>
+
+<!-- ── Messages area ──────────────────────────────────────────── -->
+<main class="chat-messages" id="chatMessages" aria-live="polite">
+  <div class="chat-messages-inner">
+    <div class="chat-empty" id="emptyState">
+      <i data-lucide="messages-square"></i>
+      <span>메시지를 입력해 시작</span>
+      <span class="chat-empty-hint">Enter 전송 · Shift+Enter 줄바꿈</span>
+    </div>
+  </div>
+</main>
+
+<!-- ── Scroll-to-bottom button ────────────────────────────────── -->
+<button class="chat-scroll-btn" id="scrollBtn" aria-label="최신 메시지로">
+  <i data-lucide="arrow-down"></i>
+  <span>최신</span>
+</button>
+
+<!-- ── Toast ──────────────────────────────────────────────────── -->
+<div class="chat-toast" id="chatToast" role="alert" aria-live="assertive">
+  <i data-lucide="alert-circle" id="chatToastIcon"></i>
+  <span id="chatToastText"></span>
+</div>
+
+<!-- ── Disconnect banner (hidden until needed) ────────────────── -->
+<div class="chat-disconnect-banner" id="disconnectBanner" style="display:none;">
+  <i data-lucide="wifi-off"></i>
+  <span>연결이 끊어졌습니다. 새로고침하세요.</span>
+  <button id="refreshBtn">새로고침</button>
+</div>
+
+<!-- ── Slash command picker ───────────────────────────────────── -->
+<div class="slash-picker" id="slashPicker" role="listbox" aria-label="슬래시 커맨드" hidden>
+  <div class="slash-picker-list" id="slashPickerList"></div>
+  <div class="slash-picker-empty" id="slashPickerEmpty" hidden>일치하는 명령이 없습니다.</div>
+</div>
+
+<!-- ── Input bar ──────────────────────────────────────────────── -->
+<footer class="chat-input-bar" id="chatInputBar">
+  <div class="chat-input-inner">
+    <textarea
+      class="chat-textarea"
+      id="chatTextarea"
+      placeholder="메시지 입력…"
+      rows="1"
+      aria-label="메시지 입력"
+    ></textarea>
+    <button class="chat-send-btn" id="chatSendBtn" aria-label="전송" disabled>
+      <i data-lucide="send"></i>
+    </button>
+  </div>
+  <div class="chat-input-hint" aria-hidden="true">
+    <kbd>Enter</kbd> 전송 &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> 줄바꿈 &nbsp;·&nbsp; <kbd>Cmd+Enter</kbd> 강제 전송 &nbsp;·&nbsp; <kbd>Cmd+K</kbd> 입력창 포커스
+  </div>
+</footer>
+
+<!-- ── Account swap modal ─────────────────────────────────────── -->
+<div class="swap-modal-backdrop" id="swapModalBackdrop" aria-hidden="true"></div>
+<div class="swap-modal" id="swapModal" role="dialog" aria-modal="true" aria-labelledby="swapModalTitle" aria-hidden="true">
+  <div class="swap-modal-header">
+    <h2 id="swapModalTitle">계정 전환</h2>
+    <button class="swap-modal-close" id="swapModalClose" aria-label="닫기">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+  <div class="swap-modal-body" id="swapModalBody">
+    <!-- Populated by renderSwapModal() -->
+  </div>
+  <div class="swap-modal-footer" id="swapModalFooter">
+    <!-- Populated by renderSwapModal() -->
+  </div>
+</div>
+
+<!-- ── Session switcher ───────────────────────────────────────── -->
+<div class="session-switcher-backdrop" id="sessionSwitcherBackdrop" hidden></div>
+<aside class="session-switcher" id="sessionSwitcher" role="dialog" aria-modal="true" aria-label="세션 전환" hidden>
+  <div class="session-switcher-header">
+    <h2 class="session-switcher-title">세션 전환</h2>
+    <button class="session-switcher-close" id="sessionSwitcherClose" aria-label="닫기">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+  <div class="session-switcher-search">
+    <i data-lucide="search" aria-hidden="true"></i>
+    <input type="text" id="sessionSwitcherSearch" placeholder="프로젝트 검색…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+  </div>
+  <div class="session-switcher-list" id="sessionSwitcherList" role="listbox" tabindex="-1"></div>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
+<script src="/static/chat.js?v=20260502b"></script>
+</body>
+</html>
