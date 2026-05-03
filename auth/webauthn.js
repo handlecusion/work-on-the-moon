@@ -11,7 +11,7 @@ const store = require('./store');
 
 const RP_ID = process.env.RP_ID || 'localhost';
 const ORIGIN = process.env.ORIGIN || 'http://localhost:3700';
-const RP_NAME = 'Claude Code Web';
+const RP_NAME = 'Work on the Moon';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 5 min
 
@@ -85,7 +85,7 @@ function takeChallenge(id, expectedType) {
 
 async function buildRegistrationOptions({ userName, excludeExistingCredentials = false }) {
   const data = store.getData();
-  const userID = Buffer.from('claude-web-user', 'utf8'); // single-user instance
+  const userID = Buffer.from('wotm-user', 'utf8'); // single-user instance
 
   const excludeCredentials = excludeExistingCredentials
     ? data.passkeys.map(pk => ({
@@ -99,7 +99,7 @@ async function buildRegistrationOptions({ userName, excludeExistingCredentials =
     rpName: RP_NAME,
     rpID: RP_ID,
     userID,
-    userName: userName || 'claude-web',
+    userName: userName || 'wotm',
     userDisplayName: userName || 'Claude Web',
     attestationType: 'none',
     excludeCredentials,

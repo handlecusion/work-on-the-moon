@@ -22,8 +22,8 @@ const WebSocket = require('ws');
 const store = require('../auth/store');
 const liveSessionScanner = require('../lib/liveSessionScanner');
 
-const HOST = process.env.CLAUDE_WEB_HOST || '127.0.0.1';
-const PORT = parseInt(process.env.CLAUDE_WEB_PORT, 10) || 3700;
+const HOST = process.env.WOTM_HOST || '127.0.0.1';
+const PORT = parseInt(process.env.WOTM_PORT, 10) || 3700;
 
 let passed = 0;
 let failed = 0;

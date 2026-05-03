@@ -155,11 +155,11 @@ async function main() {
   liveModule.attachWS(server);
 
   server.listen(PORT, HOST, () => {
-    console.log(`[claude-web] listening on http://${HOST}:${PORT}`);
-    console.log(`[claude-web] origin:    ${ORIGIN}`);
-    console.log(`[claude-web] workspace: ${projectsModule.CODE_DIR}`);
+    console.log(`[wotm] listening on http://${HOST}:${PORT}`);
+    console.log(`[wotm] origin:    ${ORIGIN}`);
+    console.log(`[wotm] workspace: ${projectsModule.CODE_DIR}`);
     if (!fs.existsSync(projectsModule.CODE_DIR)) {
-      console.warn(`[claude-web] WARN: workspace directory does not exist — set WORKSPACE_DIR to the folder that contains your projects.`);
+      console.warn(`[wotm] WARN: workspace directory does not exist — set WORKSPACE_DIR to the folder that contains your projects.`);
     }
   });
 

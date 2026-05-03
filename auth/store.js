@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 
-const DATA_DIR = path.join(os.homedir(), '.claude-web');
+const DATA_DIR = path.join(os.homedir(), '.wotm');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 
 const DEFAULT_DATA = {

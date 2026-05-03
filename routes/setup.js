@@ -22,7 +22,7 @@ router.post('/api/setup/options', async (req, res) => {
   }
   try {
     const { options, challengeId } = await webauthn.buildRegistrationOptions({
-      userName: deviceName || 'claude-web',
+      userName: deviceName || 'wotm',
       excludeExistingCredentials: true
     });
     res.json({ options, challengeId });

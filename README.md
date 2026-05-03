@@ -175,7 +175,7 @@ npx work-on-the-moon reset
 | `CLAUDE_BIN` | autodetected             | Override path to the `claude` binary   |
 | `WORKSPACE_DIR` | `~/Code`              | Directory that contains your project subdirectories. Supports `~/...`. |
 
-State lives in `~/.claude-web/data.json` (passkeys, sessions, project history)
+State lives in `~/.wotm/data.json` (passkeys, sessions, project history)
 and is created on first run. Changing `RP_ID` invalidates passkeys registered
 under the old value, so settle on the hostname before registering devices.
 
@@ -253,7 +253,7 @@ opportunistically — if present, input forwarding is enabled.
 
 - Single-user passkey (WebAuthn) registration.
 - Session token in httpOnly cookie; WS accepts cookie or `?session=<token>`.
-- 30-day session TTL. Atomic write + mutex on `~/.claude-web/data.json`.
+- 30-day session TTL. Atomic write + mutex on `~/.wotm/data.json`.
 - Bootstrap prints a one-time registration URL to stdout. `wotm reset` wipes
   all state.
 

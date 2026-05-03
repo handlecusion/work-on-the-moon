@@ -172,7 +172,7 @@ npx work-on-the-moon reset
 | `CLAUDE_BIN` | 자동 탐색                | `claude` 바이너리 경로 override        |
 | `WORKSPACE_DIR` | `~/Code`              | 프로젝트들이 들어 있는 루트 디렉토리. `~/...` 사용 가능. |
 
-상태는 첫 실행 시 `~/.claude-web/data.json`에 생성·저장됨 (패스키, 세션, 프로젝트 기록).
+상태는 첫 실행 시 `~/.wotm/data.json`에 생성·저장됨 (패스키, 세션, 프로젝트 기록).
 `RP_ID`를 변경하면 이전 값으로 등록된 패스키가 무효화되므로, 디바이스 등록 전에
 hostname 확정 권장.
 

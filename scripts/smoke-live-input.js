@@ -9,7 +9,7 @@
  *      working session). Prefer surfaces that look idle (busy=false).
  *   3. Connect to /ws/live, send hello with the chosen sessionId.
  *   4. Wait for `init`, assert meta.cmuxAvailable === true.
- *   5. Send {type:'send', text:'# claude-web smoke (no-op)\n'}. The leading
+ *   5. Send {type:'send', text:'# wotm smoke (no-op)\n'}. The leading
  *      `#` makes claude/shell treat it as a comment so it's harmless.
  *   6. Wait 2 s — assert no `error` event arrived.
  *   7. Listen 3 s for any new ws frames as a positive signal of cmux echo,
@@ -25,13 +25,13 @@ const WebSocket = require('ws');
 const store = require('../auth/store');
 const liveSessionScanner = require('../lib/liveSessionScanner');
 
-const HOST = process.env.CLAUDE_WEB_HOST || '127.0.0.1';
-const PORT = parseInt(process.env.CLAUDE_WEB_PORT, 10) || 3700;
+const HOST = process.env.WOTM_HOST || '127.0.0.1';
+const PORT = parseInt(process.env.WOTM_PORT, 10) || 3700;
 
 // Never inject keystrokes into these projects — keep our own dev session
 // quiet, plus a small allowlist of "do not touch" surfaces. Override via env.
 const SENSITIVE_BASENAMES = new Set(
-  (process.env.SMOKE_SENSITIVE_PROJECTS || 'working-in-the-moon,claude-web')
+  (process.env.SMOKE_SENSITIVE_PROJECTS || 'working-in-the-moon,work-on-the-moon')
     .split(',').map(s => s.trim()).filter(Boolean)
 );
 
@@ -164,7 +164,7 @@ async function main() {
   const token = findValidToken();
   if (!token) {
     process.stderr.write(
-      '\n[smoke] No valid session found in ~/.claude-web/data.json.\n' +
+      '\n[smoke] No valid session found in ~/.wotm/data.json.\n' +
       'Please log in via the browser first, then re-run this script.\n\n'
     );
     process.exit(1);
@@ -230,7 +230,7 @@ async function main() {
   const sendIdx = api.received.length;
 
   // ---- 5. send a comment line ----
-  const probeText = '# claude-web smoke (no-op)\n';
+  const probeText = '# wotm smoke (no-op)\n';
   api.sendMsg({ type: 'send', text: probeText });
   log('sent {type:send, text: ' + JSON.stringify(probeText) + '}');
 

@@ -14,9 +14,9 @@ const WebSocket = require('ws');
 const store = require('../auth/store');
 const swapper = require('../lib/authSwapper');
 
-const HOST = process.env.CLAUDE_WEB_HOST || '127.0.0.1';
-const PORT = parseInt(process.env.CLAUDE_WEB_PORT, 10) || 3700;
-const PROJECT = process.argv[2] || 'claude-web';
+const HOST = process.env.WOTM_HOST || '127.0.0.1';
+const PORT = parseInt(process.env.WOTM_PORT, 10) || 3700;
+const PROJECT = process.argv[2] || 'work-on-the-moon';
 const TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ async function main() {
   const token = findValidToken();
   if (!token) {
     process.stderr.write(
-      '\n[smoke-auth] No valid session found in ~/.claude-web/data.json.\n' +
+      '\n[smoke-auth] No valid session found in ~/.wotm/data.json.\n' +
       'Please log in via the browser first, then re-run this script.\n\n'
     );
     process.exit(1);
