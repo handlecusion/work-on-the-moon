@@ -264,6 +264,16 @@ opportunistically — if present, input forwarding is enabled.
 - cmux unix socket (`~/Library/Application Support/cmux/cmux.sock`) — optional,
   enables live input. Without it, live mode is read-only.
 
+## Acknowledgments
+
+- **cmux** — `wotm`'s Live mode rides on cmux's workspace/surface IPC. The
+  "use cmux from a phone" experience exists only because cmux exposes a clean
+  Unix socket protocol with `listWorkspaces` / `listSurfaces` / `sendText`.
+  Thanks to the cmux team.
+- **Tailscale** — Funnel and Serve, plus managed TLS for `*.ts.net`, are what
+  make `wotm` reachable from anywhere without owning a domain or running a
+  reverse proxy. Thanks to the Tailscale team.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
