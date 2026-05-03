@@ -8,7 +8,16 @@ const session = require('../auth/session');
 
 const router = express.Router();
 
-const CODE_DIR = path.join(os.homedir(), 'Code');
+// Workspace root — directory that contains your project subdirectories.
+// Override with WORKSPACE_DIR=/abs/path (or ~/some/path). Defaults to ~/Code.
+function resolveWorkspaceDir() {
+  const raw = (process.env.WORKSPACE_DIR || '').trim();
+  if (!raw) return path.join(os.homedir(), 'Code');
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2));
+  return path.resolve(raw);
+}
+const CODE_DIR = resolveWorkspaceDir();
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 // Lazy-load projectStore to avoid circular deps at startup

@@ -31,7 +31,7 @@
   "scripts": {
     "start": "node server.js",
     "reset": "node server.js reset",
-    "postinstall": "node -e \"const f=require('path').join(__dirname,'node_modules/node-pty/prebuilds',process.platform+'-'+process.arch,'spawn-helper');try{require('fs').chmodSync(f,0o755)}catch(e){}\""
+    "postinstall": "node -e \"try{const p=require('path');const d=p.dirname(require.resolve('node-pty/package.json'));const f=p.join(d,'prebuilds',process.platform+'-'+process.arch,'spawn-helper');require('fs').chmodSync(f,0o755)}catch(e){}\""
   },
   "files": [
     "bin/",
@@ -40,7 +40,6 @@
     "lib/",
     "routes/",
     "public/",
-    "scripts/",
     "docs/",
     "LICENSE",
     "README.md"
@@ -57,7 +56,6 @@
     "node-pty": "^1.0.0",
     "@simplewebauthn/server": "^9.0.3",
     "cookie-parser": "^1.4.6",
-    "qrcode": "^1.5.3",
-    "uuid": "^9.0.1"
+    "qrcode": "^1.5.3"
   }
 }

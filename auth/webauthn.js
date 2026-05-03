@@ -6,7 +6,7 @@ const {
   generateAuthenticationOptions,
   verifyAuthenticationResponse
 } = require('@simplewebauthn/server');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const store = require('./store');
 
 const RP_ID = process.env.RP_ID || 'localhost';
@@ -61,7 +61,7 @@ function serializeOptionsForWire(options) {
 }
 
 function storeChallenge(challenge, type) {
-  const id = uuidv4();
+  const id = crypto.randomUUID();
   return store.update((data) => {
     data.currentChallenges[id] = {
       challenge,

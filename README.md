@@ -16,6 +16,14 @@ npx work-on-the-moon
 > Live view of a `cmux-claude` session — read-only by default, with optional
 > keystroke forwarding through the cmux Unix socket.
 
+> **Status:** `0.x` — APIs and on-disk state may change between minor versions.
+> **Security:** the Managed flow runs `claude --dangerously-skip-permissions`,
+> i.e. the spawned `claude` will execute file/shell tools without asking. Only
+> expose `wotm` to a trusted device (your own phone/laptop), behind a passkey,
+> behind TLS.
+> **cmux is optional** — without it, Live mode still works as a read-only
+> mirror; cmux just adds keystroke forwarding.
+
 ---
 
 ## What it is
@@ -23,7 +31,8 @@ npx work-on-the-moon
 `wotm` is a small self-hosted Node server that does two things:
 
 1. **Managed sessions (`/chat/<project>`)** — spawns `claude --dangerously-skip-permissions`
-   inside `~/Code/<project>/` and exposes a chat UI to your browser. Bidirectional.
+   inside `<WORKSPACE_DIR>/<project>/` (default `~/Code/<project>/`) and exposes a
+   chat UI to your browser. Bidirectional.
 2. **Live sessions (`/chat-live/...`)** — **read-only mirror of any `claude` you
    already started elsewhere** (a terminal, **cmux-claude**, tmux, etc.) by tailing
    `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`. If `cmux` is running, input is
@@ -164,6 +173,7 @@ npx work-on-the-moon reset
 | `ORIGIN`     | `http://localhost:3700`  | WebAuthn expected origin (set this for tunnel mode) |
 | `RP_ID`      | `localhost`              | WebAuthn Relying Party ID (set this for tunnel mode) |
 | `CLAUDE_BIN` | autodetected             | Override path to the `claude` binary   |
+| `WORKSPACE_DIR` | `~/Code`              | Directory that contains your project subdirectories. Supports `~/...`. |
 
 State lives in `~/.claude-web/data.json` (passkeys, sessions, project history)
 and is created on first run. Changing `RP_ID` invalidates passkeys registered

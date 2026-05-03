@@ -13,6 +13,7 @@ const authRouter = require('./routes/auth');
 const setupRouter = require('./routes/setup');
 const devicesRouter = require('./routes/devices');
 const projectsModule = require('./routes/projects');
+const fs = require('fs');
 const chatModule = require('./routes/chat');
 const liveModule = require('./routes/live');
 const slashRouter = require('./routes/slash');
@@ -40,11 +41,11 @@ async function runReset() {
 
 function printSetupBanner(token) {
   const url = ORIGIN.replace(/\/$/, '') + '/setup?token=' + token;
-  const line = '=============================='; // exactly as spec
-  // Print to stdout, ALL CAPS bordered box per spec
+  const line = '==============================';
   console.log('');
   console.log(line);
-  console.log('초기 패스키 등록 URL (10분 유효):');
+  console.log('Initial passkey registration URL (valid for 10 minutes)');
+  console.log('초기 패스키 등록 URL (10분 유효)');
   console.log(url);
   console.log(line);
   console.log('');
@@ -155,7 +156,11 @@ async function main() {
 
   server.listen(PORT, HOST, () => {
     console.log(`[claude-web] listening on http://${HOST}:${PORT}`);
-    console.log(`[claude-web] origin: ${ORIGIN}`);
+    console.log(`[claude-web] origin:    ${ORIGIN}`);
+    console.log(`[claude-web] workspace: ${projectsModule.CODE_DIR}`);
+    if (!fs.existsSync(projectsModule.CODE_DIR)) {
+      console.warn(`[claude-web] WARN: workspace directory does not exist — set WORKSPACE_DIR to the folder that contains your projects.`);
+    }
   });
 
   // Periodically prune expired records

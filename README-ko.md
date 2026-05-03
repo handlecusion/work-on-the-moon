@@ -16,6 +16,13 @@ npx work-on-the-moon
 > `cmux-claude` 세션 라이브 뷰 — 기본은 read-only, cmux Unix 소켓을 통한
 > 키스트로크 forwarding은 옵션.
 
+> **상태:** `0.x` — 마이너 버전 간 API/온디스크 상태가 바뀔 수 있음.
+> **보안:** Managed flow는 `claude --dangerously-skip-permissions`로 실행됨.
+> 즉, 띄워진 `claude`가 파일/셸 도구를 확인 없이 실행함. 본인의 신뢰 가능한
+> 디바이스(자기 폰/노트북) 한정 + 패스키 + TLS 뒤에서만 노출하라.
+> **cmux는 선택 사항** — 없어도 Live 모드는 read-only 미러로 동작함. cmux는
+> 키스트로크 forwarding을 추가해 줄 뿐.
+
 ---
 
 ## 무엇을 하는가
@@ -23,7 +30,8 @@ npx work-on-the-moon
 `wotm`은 자기 머신에서 돌리는 작은 셀프호스팅 Node 서버야. 두 가지를 함:
 
 1. **Managed (`/chat/<project>`)** — 서버가 직접 `claude --dangerously-skip-permissions`를
-   `~/Code/<project>/`에서 spawn하고 브라우저 chat UI로 양방향 사용.
+   `<WORKSPACE_DIR>/<project>/` (기본값 `~/Code/<project>/`)에서 spawn하고 브라우저
+   chat UI로 양방향 사용.
 2. **Live (`/chat-live/...`)** — **터미널이나 cmux-claude에서 이미 띄워둔
    claude 프로세스를 read-only로 미러링.** `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`을
    tail해서 보여줌. cmux가 떠 있으면 unix 소켓으로 입력도 forwarding되니
@@ -162,6 +170,7 @@ npx work-on-the-moon reset
 | `ORIGIN`     | `http://localhost:3700`  | WebAuthn expected origin (터널 모드면 설정) |
 | `RP_ID`      | `localhost`              | WebAuthn Relying Party ID (터널 모드면 설정) |
 | `CLAUDE_BIN` | 자동 탐색                | `claude` 바이너리 경로 override        |
+| `WORKSPACE_DIR` | `~/Code`              | 프로젝트들이 들어 있는 루트 디렉토리. `~/...` 사용 가능. |
 
 상태는 첫 실행 시 `~/.claude-web/data.json`에 생성·저장됨 (패스키, 세션, 프로젝트 기록).
 `RP_ID`를 바꾸면 옛 값으로 등록된 패스키는 무효화되니, 디바이스 등록 전에 hostname
