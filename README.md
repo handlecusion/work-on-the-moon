@@ -164,6 +164,28 @@ Reset everything (passkeys, sessions, tokens):
 npx work-on-the-moon reset
 ```
 
+## Autostart at login (macOS)
+
+For long-running deployments, install a LaunchAgent so `wotm` boots
+automatically when you log in (and restarts on crash):
+
+```sh
+npm install -g work-on-the-moon
+wotm install --origin=https://wotm.example.com --rp-id=wotm.example.com
+wotm status      # show LaunchAgent state
+wotm uninstall   # unload + remove
+```
+
+`install` writes `~/Library/LaunchAgents/com.work-on-the-moon.plist` capturing
+the current `node` binary path, `PATH`, and any `WORKSPACE_DIR` /
+`CLAUDE_BIN` / `CMUX_*` env vars set in your shell at install time. Re-run
+`wotm install` after upgrading node or changing those values. Logs go to
+`~/.wotm/launchd.out.log` and `~/.wotm/launchd.err.log`.
+
+The tunnel itself (Cloudflare Tunnel, Tailscale Funnel) needs its own
+autostart — `sudo cloudflared service install` for Cloudflare, or the
+default Tailscale daemon for Funnel/Serve.
+
 ## Configuration
 
 | Env var      | Default                  | Notes                                  |

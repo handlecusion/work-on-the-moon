@@ -161,6 +161,26 @@ WebAuthn이 `http://localhost`를 secure context로 취급하므로 TLS 없이�
 npx work-on-the-moon reset
 ```
 
+## 로그인 시 자동 시작 (macOS)
+
+상시 운영하려면 LaunchAgent를 설치해서 로그인 시 `wotm`이 자동 기동되도록
+설정 가능 (크래시 시 자동 재시작 포함):
+
+```sh
+npm install -g work-on-the-moon
+wotm install --origin=https://wotm.example.com --rp-id=wotm.example.com
+wotm status      # LaunchAgent 상태 확인
+wotm uninstall   # 언로드 + 제거
+```
+
+`install` 실행 시 `~/Library/LaunchAgents/com.work-on-the-moon.plist`가 작성되며,
+현재 셸의 `node` 절대경로, `PATH`, `WORKSPACE_DIR` / `CLAUDE_BIN` / `CMUX_*` 환경
+변수가 그대로 박힙니다. node를 업그레이드하거나 위 값들이 바뀌면 `wotm install`을
+다시 실행해야 함. 로그는 `~/.wotm/launchd.out.log`, `~/.wotm/launchd.err.log`.
+
+터널 자체(Cloudflare Tunnel, Tailscale Funnel)도 별도로 자동 기동해야 합니다 —
+Cloudflare는 `sudo cloudflared service install`, Tailscale은 기본 데몬이 처리.
+
 ## 설정
 
 | Env 변수     | 기본값                   | 설명                                   |
