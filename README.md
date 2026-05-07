@@ -11,7 +11,7 @@ npx work-on-the-moon
 # → http://localhost:3700  (passkey setup link printed in stdout)
 ```
 
-![cmux-claude session mirrored in browser](docs/screenshots/chat-live.png)
+![cmux-claude session mirrored in browser](https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/chat-live.png)
 
 > Live view of a `cmux-claude` session — read-only by default, with optional
 > keystroke forwarding through the cmux Unix socket.
@@ -64,7 +64,7 @@ tunnel/proxy that:
 Two recommended setups — pick one. Both let you use the **same passkey** across
 all devices that hit the same hostname.
 
-![Login screen](docs/screenshots/login.png)
+![Login screen](https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/login.png)
 
 ### Option A — Cloudflare Tunnel
 

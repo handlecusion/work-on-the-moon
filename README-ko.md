@@ -11,7 +11,7 @@ npx work-on-the-moon
 # → http://localhost:3700  (패스키 등록 링크가 stdout에 출력됨)
 ```
 
-![브라우저에서 미러링되는 cmux-claude 세션](docs/screenshots/chat-live.png)
+![브라우저에서 미러링되는 cmux-claude 세션](https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/chat-live.png)
 
 > `cmux-claude` 세션 라이브 뷰 — 기본은 read-only, cmux Unix 소켓을 통한
 > 키스트로크 forwarding은 옵션.
@@ -62,7 +62,7 @@ npx work-on-the-moon
 추천 방식 두 가지 — 둘 중 하나 선택. 둘 다 같은 hostname으로 접속하는 모든
 디바이스에서 **하나의 패스키** 공유 가능.
 
-![로그인 화면](docs/screenshots/login.png)
+![로그인 화면](https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/login.png)
 
 ### Option A — Cloudflare Tunnel
 

@@ -40,9 +40,9 @@
     "lib/",
     "routes/",
     "public/",
-    "docs/",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "README-ko.md"
   ],
   "engines": {
     "node": ">=20"
