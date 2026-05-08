@@ -37,6 +37,12 @@ const state = {
     fetched: false,
   },
 
+  // Pending attachments (uploaded before send)
+  attach: {
+    pending: [],   // [{ id, name, mime, size, status, absPath, thumbUrl, error }]
+    nextLocalId: 1,
+  },
+
   // Session switcher
   switcher: {
     open: false,
@@ -80,6 +86,18 @@ const acpEmail           = $('acpEmail');
 const acpOrg             = $('acpOrg');
 const acpSub             = $('acpSub');
 const acpSwapBtn         = $('acpSwapBtn');
+
+// In-popover account section (mobile only)
+const popoverAccountSection = $('popoverAccountSection');
+const popAcctEmail          = $('popAcctEmail');
+const popAcctSub            = $('popAcctSub');
+const popAcctSwapBtn        = $('popAcctSwapBtn');
+const mqMobileHeader        = window.matchMedia('(max-width: 600px)');
+
+// Attachments
+const chatAttachStrip = $('chatAttachStrip');
+const chatAttachBtn   = $('chatAttachBtn');
+const chatFileInput   = $('chatFileInput');
 
 // Swap modal
 const swapModalBackdrop = $('swapModalBackdrop');
@@ -296,7 +314,9 @@ function setBusy(busy) {
 function updateSendBtn() {
   if (state.busy) return;
   const empty = !chatTextarea.value.trim();
-  chatSendBtn.disabled = empty;
+  const hasReady = state.attach.pending.some((a) => a.status === 'ready');
+  const anyUploading = state.attach.pending.some((a) => a.status === 'uploading');
+  chatSendBtn.disabled = (empty && !hasReady) || anyUploading;
 }
 
 // ─── Scroll pinning ──────────────────────────────────────────────────────────
@@ -359,11 +379,53 @@ function el(tag, cls, html) {
 }
 
 // ── User bubble ──
-function renderUserBubble(text) {
+function renderUserBubble(text, attachments) {
   const row = el('div', 'msg-row user');
-  const bubble = el('div', 'msg-bubble', escapeHtml(text));
+  const bubble = el('div', 'msg-bubble');
+
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    const list = el('div', 'msg-attach-list');
+    for (const a of attachments) {
+      list.appendChild(buildAttachmentNode(a));
+    }
+    bubble.appendChild(list);
+  }
+  if (text) {
+    const textNode = document.createElement('span');
+    textNode.style.whiteSpace = 'pre-wrap';
+    textNode.textContent = text;
+    bubble.appendChild(textNode);
+  }
   row.appendChild(bubble);
   appendNode(row);
+}
+
+// Builds an inline attachment preview for a sent user bubble.
+// Tries to load images via the upload-serve route; falls back to a file chip.
+function buildAttachmentNode(att) {
+  const isImage = att && typeof att.mime === 'string' && att.mime.startsWith('image/');
+  const fname = att && att.absPath ? att.absPath.split('/').pop() : (att && att.name) || 'file';
+  if (isImage) {
+    const wrap = el('div', 'msg-attach-thumb');
+    const img = document.createElement('img');
+    img.alt = att.name || '';
+    img.loading = 'lazy';
+    img.src = '/api/projects/' + encodeURIComponent(projectName) + '/upload/' + encodeURIComponent(fname);
+    img.onerror = () => {
+      // Fall back to file chip on load failure (e.g., file pruned).
+      wrap.replaceWith(buildAttachmentFileChip(att));
+    };
+    wrap.appendChild(img);
+    return wrap;
+  }
+  return buildAttachmentFileChip(att);
+}
+
+function buildAttachmentFileChip(att) {
+  const chip = el('div', 'msg-attach-file');
+  chip.innerHTML = '<i data-lucide="file"></i><span></span>';
+  chip.querySelector('span').textContent = (att && att.name) || 'file';
+  return chip;
 }
 
 // ── Assistant bubble with markdown rendering ──
@@ -1057,7 +1119,7 @@ function renderEvent(evt) {
   const kind = evt.kind;
 
   if (kind === 'user_text') {
-    renderUserBubble(evt.text || '');
+    renderUserBubble(evt.text || '', Array.isArray(evt.attachments) ? evt.attachments : null);
     return;
   }
 
@@ -1335,17 +1397,293 @@ chatTextarea.addEventListener('compositionend',   () => { isComposing = false; }
 
 function sendMessage() {
   const text = chatTextarea.value;
-  if (!text.trim() || state.busy) return;
+  const ready = state.attach.pending.filter((a) => a.status === 'ready');
+  const anyUploading = state.attach.pending.some((a) => a.status === 'uploading');
+  if (anyUploading) return;
+  if (!text.trim() && ready.length === 0) return;
+  if (state.busy) return;
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
     showToast('연결이 끊어졌습니다.', 'error');
     return;
   }
-  state.ws.send(JSON.stringify({ type: 'send', text }));
+  const payload = { type: 'send', text };
+  if (ready.length > 0) {
+    payload.attachments = ready.map((a) => ({
+      id: a.id,
+      name: a.name,
+      mime: a.mime,
+      size: a.size,
+      absPath: a.absPath
+    }));
+  }
+  state.ws.send(JSON.stringify(payload));
   chatTextarea.value = '';
+  // Drop any remaining failed/pending chips and revoke local thumbnails.
+  for (const a of state.attach.pending) {
+    if (a.thumbUrl) { try { URL.revokeObjectURL(a.thumbUrl); } catch (_) {} }
+  }
+  state.attach.pending = [];
+  renderAttachStrip();
   autoResize();
   updateSendBtn();
   scrollToBottom(true);
 }
+
+// ─── Attachments (clip button, paste, drag-and-drop, upload) ────────────────
+const ATTACH_LIMIT = 5;
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+const ALLOWED_MIME_PREFIX = ['image/', 'application/pdf', 'text/'];
+
+function isAllowedMime(mime) {
+  if (!mime) return false;
+  return ALLOWED_MIME_PREFIX.some((p) => mime === p || mime.startsWith(p));
+}
+
+function formatBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderAttachStrip() {
+  if (!chatAttachStrip) return;
+  if (state.attach.pending.length === 0) {
+    chatAttachStrip.setAttribute('hidden', '');
+    chatAttachStrip.innerHTML = '';
+    return;
+  }
+  chatAttachStrip.removeAttribute('hidden');
+  chatAttachStrip.innerHTML = '';
+  for (const a of state.attach.pending) {
+    const chip = document.createElement('div');
+    chip.className = 'chat-attach-chip' + (a.status === 'error' ? ' error' : '');
+    chip.dataset.id = String(a.id);
+
+    const thumb = document.createElement('div');
+    thumb.className = 'chat-attach-chip-thumb';
+    if (a.thumbUrl) {
+      const img = document.createElement('img');
+      img.src = a.thumbUrl;
+      img.alt = '';
+      thumb.appendChild(img);
+    } else {
+      thumb.innerHTML = '<i data-lucide="file"></i>';
+    }
+    chip.appendChild(thumb);
+
+    const meta = document.createElement('div');
+    meta.className = 'chat-attach-chip-meta';
+    const name = document.createElement('span');
+    name.className = 'chat-attach-chip-name';
+    name.textContent = a.name;
+    meta.appendChild(name);
+    const sub = document.createElement('span');
+    sub.className = 'chat-attach-chip-sub';
+    if (a.status === 'uploading') sub.textContent = '업로드 중…';
+    else if (a.status === 'error') sub.textContent = a.error || '오류';
+    else sub.textContent = formatBytes(a.size);
+    meta.appendChild(sub);
+    chip.appendChild(meta);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'chat-attach-chip-remove';
+    remove.setAttribute('aria-label', '제거');
+    remove.innerHTML = '<i data-lucide="x"></i>';
+    remove.addEventListener('click', () => removeAttachment(a.id));
+    chip.appendChild(remove);
+
+    if (a.status === 'uploading') {
+      const bar = document.createElement('div');
+      bar.className = 'chat-attach-chip-progress';
+      bar.style.width = (a.progress || 5) + '%';
+      chip.appendChild(bar);
+    }
+
+    chatAttachStrip.appendChild(chip);
+  }
+  renderIcons();
+}
+
+function removeAttachment(id) {
+  const idx = state.attach.pending.findIndex((a) => a.id === id);
+  if (idx === -1) return;
+  const a = state.attach.pending[idx];
+  if (a.thumbUrl) { try { URL.revokeObjectURL(a.thumbUrl); } catch (_) {} }
+  if (a.xhr && a.status === 'uploading') {
+    try { a.xhr.abort(); } catch (_) {}
+  }
+  state.attach.pending.splice(idx, 1);
+  renderAttachStrip();
+  updateSendBtn();
+}
+
+function uploadOneFile(file) {
+  // Pre-flight checks (server enforces too, but fail fast for nicer UX).
+  if (state.attach.pending.length >= ATTACH_LIMIT) {
+    showToast('첨부는 최대 ' + ATTACH_LIMIT + '개까지 가능합니다.', 'info');
+    return;
+  }
+  if (file.size > ATTACH_MAX_BYTES) {
+    showToast(file.name + ' 은(는) 너무 큽니다 (최대 10MB)', 'error');
+    return;
+  }
+  if (!isAllowedMime(file.type)) {
+    showToast('지원하지 않는 형식: ' + (file.type || '알 수 없음'), 'error');
+    return;
+  }
+
+  const localId = state.attach.nextLocalId++;
+  const isImage = file.type.startsWith('image/');
+  const thumbUrl = isImage ? URL.createObjectURL(file) : null;
+
+  const entry = {
+    id: localId,
+    name: file.name || 'file',
+    mime: file.type || 'application/octet-stream',
+    size: file.size,
+    status: 'uploading',
+    progress: 5,
+    absPath: null,
+    thumbUrl,
+    error: null,
+    xhr: null,
+  };
+  state.attach.pending.push(entry);
+  renderAttachStrip();
+  updateSendBtn();
+
+  const xhr = new XMLHttpRequest();
+  entry.xhr = xhr;
+  xhr.open('POST', '/api/projects/' + encodeURIComponent(projectName) + '/upload');
+  xhr.upload.addEventListener('progress', (e) => {
+    if (!e.lengthComputable) return;
+    entry.progress = Math.max(5, Math.round((e.loaded / e.total) * 100));
+    // Tiny in-place progress update (avoid full re-render churn).
+    const chip = chatAttachStrip.querySelector('.chat-attach-chip[data-id="' + entry.id + '"] .chat-attach-chip-progress');
+    if (chip) chip.style.width = entry.progress + '%';
+  });
+  xhr.onload = () => {
+    entry.xhr = null;
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        const f = (data.files || [])[0];
+        if (f && f.absPath) {
+          entry.status = 'ready';
+          entry.absPath = f.absPath;
+          // Server-canonical metadata may differ slightly (e.g. sanitized name).
+          if (typeof f.name === 'string') entry.name = f.name;
+          if (typeof f.size === 'number') entry.size = f.size;
+          if (typeof f.mime === 'string') entry.mime = f.mime;
+        } else {
+          entry.status = 'error';
+          entry.error = '서버 응답 오류';
+        }
+      } catch (_) {
+        entry.status = 'error';
+        entry.error = '서버 응답 파싱 실패';
+      }
+    } else {
+      entry.status = 'error';
+      try {
+        const data = JSON.parse(xhr.responseText);
+        entry.error = data.error || ('HTTP ' + xhr.status);
+      } catch (_) {
+        entry.error = 'HTTP ' + xhr.status;
+      }
+      showToast('업로드 실패: ' + entry.error, 'error');
+    }
+    renderAttachStrip();
+    updateSendBtn();
+  };
+  xhr.onerror = () => {
+    entry.xhr = null;
+    entry.status = 'error';
+    entry.error = '네트워크 오류';
+    renderAttachStrip();
+    updateSendBtn();
+  };
+
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  xhr.send(fd);
+}
+
+function handleFileList(fileList) {
+  if (!fileList) return;
+  const files = Array.from(fileList);
+  for (const f of files) {
+    if (state.attach.pending.length >= ATTACH_LIMIT) {
+      showToast('첨부 한도 도달 (최대 ' + ATTACH_LIMIT + '개)', 'info');
+      break;
+    }
+    uploadOneFile(f);
+  }
+}
+
+if (chatAttachBtn && chatFileInput) {
+  chatAttachBtn.addEventListener('click', () => {
+    if (state.busy) return;
+    chatFileInput.click();
+  });
+  chatFileInput.addEventListener('change', () => {
+    handleFileList(chatFileInput.files);
+    // Reset so picking the same file again triggers change.
+    chatFileInput.value = '';
+  });
+}
+
+// Paste support: capture image blobs from the clipboard.
+chatTextarea.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items || items.length === 0) return;
+  const files = [];
+  for (const it of items) {
+    if (it.kind === 'file') {
+      const f = it.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  if (files.length > 0) {
+    e.preventDefault();
+    for (const f of files) uploadOneFile(f);
+  }
+});
+
+// Drag-and-drop support: highlight the page during drag, accept drop anywhere.
+let dragDepth = 0;
+function isFileDrag(e) {
+  if (!e.dataTransfer) return false;
+  const types = Array.from(e.dataTransfer.types || []);
+  return types.includes('Files');
+}
+window.addEventListener('dragenter', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  document.querySelector('.chat-page')?.classList.add('drop-target');
+});
+window.addEventListener('dragover', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (e) => {
+  if (!isFileDrag(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    document.querySelector('.chat-page')?.classList.remove('drop-target');
+  }
+});
+window.addEventListener('drop', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.querySelector('.chat-page')?.classList.remove('drop-target');
+  if (e.dataTransfer && e.dataTransfer.files) handleFileList(e.dataTransfer.files);
+});
 
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
 
@@ -1533,6 +1871,9 @@ function refreshAccountChip() {
     if (acpEmail) acpEmail.textContent = '로그인되지 않음';
     if (acpOrg) acpOrg.textContent = '';
     if (acpSub) acpSub.textContent = '';
+    if (popAcctEmail) popAcctEmail.textContent = '로그인되지 않음';
+    if (popAcctSub) popAcctSub.textContent = '';
+    if (popoverAccountSection) popoverAccountSection.classList.add('warning');
   } else {
     accountChip.classList.remove('account-chip--warning');
     const email = acct.email || '—';
@@ -1541,16 +1882,30 @@ function refreshAccountChip() {
 
     if (acpEmail) acpEmail.textContent = email;
     if (acpOrg) acpOrg.textContent = acct.orgName || '';
-    if (acpSub) {
-      const parts = [];
-      if (acct.subscriptionType) parts.push(acct.subscriptionType);
-      if (acct.authMethod) parts.push(acct.authMethod);
-      if (acct.apiProvider) parts.push(acct.apiProvider);
-      acpSub.textContent = parts.join(' · ');
-    }
+    if (popAcctEmail) popAcctEmail.textContent = email;
+    const subParts = [];
+    if (acct.orgName) subParts.push(acct.orgName);
+    if (acct.subscriptionType) subParts.push(acct.subscriptionType);
+    if (acct.authMethod) subParts.push(acct.authMethod);
+    if (acct.apiProvider) subParts.push(acct.apiProvider);
+    if (acpSub) acpSub.textContent = subParts.filter((p) => p !== acct.orgName).join(' · ');
+    if (popAcctSub) popAcctSub.textContent = subParts.join(' · ');
+    if (popoverAccountSection) popoverAccountSection.classList.remove('warning');
+  }
+  // Show the in-popover account block only on phone widths.
+  if (popoverAccountSection) {
+    if (mqMobileHeader.matches) popoverAccountSection.removeAttribute('hidden');
+    else popoverAccountSection.setAttribute('hidden', '');
   }
   renderIcons();
 }
+
+// Toggle in-popover account visibility on viewport changes (rotation, resize).
+mqMobileHeader.addEventListener('change', () => {
+  if (!popoverAccountSection) return;
+  if (mqMobileHeader.matches) popoverAccountSection.removeAttribute('hidden');
+  else popoverAccountSection.setAttribute('hidden', '');
+});
 
 function openAccountChipPopover() {
   closePopover(); // Ensure menu popover is closed
@@ -1591,6 +1946,13 @@ accountChip.addEventListener('keydown', (e) => {
 if (acpSwapBtn) {
   acpSwapBtn.addEventListener('click', () => {
     closeAccountChipPopover();
+    openSwapModal();
+  });
+}
+
+if (popAcctSwapBtn) {
+  popAcctSwapBtn.addEventListener('click', () => {
+    closePopover();
     openSwapModal();
   });
 }

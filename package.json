@@ -51,11 +51,12 @@
     "darwin"
   ],
   "dependencies": {
-    "express": "^4.19.0",
-    "ws": "^8.18.0",
-    "node-pty": "^1.0.0",
     "@simplewebauthn/server": "^9.0.3",
+    "busboy": "^1.6.0",
     "cookie-parser": "^1.4.6",
-    "qrcode": "^1.5.3"
+    "express": "^4.19.0",
+    "node-pty": "^1.0.0",
+    "qrcode": "^1.5.3",
+    "ws": "^8.18.0"
   }
 }

@@ -25,3 +25,4 @@ build/
 /tmp/
 *.tmp
 .playwright-mcp/
+/iphone14pro-*.png

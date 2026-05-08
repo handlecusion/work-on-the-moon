@@ -57,6 +57,21 @@
 <!-- ── Popover backdrop + menu ────────────────────────────────── -->
 <div class="chat-popover-backdrop" id="popoverBackdrop" style="display:none;"></div>
 <div class="chat-popover" id="chatPopover" role="menu">
+  <!-- Account info (visible only on mobile, where the standalone chip is hidden) -->
+  <div class="chat-popover-account" id="popoverAccountSection" hidden>
+    <div class="chat-popover-account-row">
+      <i data-lucide="user"></i>
+      <div class="chat-popover-account-info">
+        <div class="chat-popover-account-email" id="popAcctEmail">—</div>
+        <div class="chat-popover-account-sub" id="popAcctSub"></div>
+      </div>
+    </div>
+    <button class="chat-popover-item" id="popAcctSwapBtn" role="menuitem">
+      <i data-lucide="refresh-cw"></i>
+      <span class="item-label">계정 전환</span>
+    </button>
+    <div class="chat-popover-divider"></div>
+  </div>
   <button class="chat-popover-item" id="newChatBtn" role="menuitem">
     <i data-lucide="plus"></i>
     <span class="item-label">새 대화</span>
@@ -132,7 +147,19 @@
 
 <!-- ── Input bar ──────────────────────────────────────────────── -->
 <footer class="chat-input-bar" id="chatInputBar">
+  <!-- Pending attachments (chips, above the textarea) -->
+  <div class="chat-attach-strip" id="chatAttachStrip" hidden></div>
   <div class="chat-input-inner">
+    <button class="chat-attach-btn" id="chatAttachBtn" type="button" aria-label="파일 첨부">
+      <i data-lucide="paperclip"></i>
+    </button>
+    <input
+      type="file"
+      id="chatFileInput"
+      multiple
+      accept="image/*,application/pdf,text/*"
+      hidden
+    />
     <textarea
       class="chat-textarea"
       id="chatTextarea"
@@ -188,6 +215,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat.js?v=20260502b"></script>
+<script src="/static/chat.js?v=20260508a"></script>
 </body>
 </html>

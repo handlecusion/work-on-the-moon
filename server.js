@@ -18,6 +18,7 @@ const chatModule = require('./routes/chat');
 const liveModule = require('./routes/live');
 const slashRouter = require('./routes/slash');
 const sessionsRouter = require('./routes/sessions');
+const uploadsRouter = require('./routes/uploads');
 
 const PORT = parseInt(process.env.PORT, 10) || 3700;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -113,6 +114,7 @@ function buildApp() {
   app.use(liveModule.router); // /chat-live/:sessionId + /api/live/:sessionId
   app.use(slashRouter);       // /api/slash-commands
   app.use(sessionsRouter);    // /api/sessions
+  app.use(uploadsRouter.router); // /api/projects/:name/upload
 
   // Root: auth or redirect to login
   app.get('/', (req, res) => {

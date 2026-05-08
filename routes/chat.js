@@ -12,6 +12,7 @@ const { runClaude } = require('../lib/claudeRunner');
 const projectStore = require('../lib/projectStore');
 const swapper = require('../lib/authSwapper');
 const skillCache = require('../lib/skillCache');
+const { UPLOADS_DIRNAME } = require('./uploads');
 
 const router = express.Router();
 
@@ -301,23 +302,67 @@ function attachWS(server) {
           return;
         }
         const text = msg.text;
-        if (!text || typeof text !== 'string' || !text.trim()) {
+        const hasText = typeof text === 'string' && text.trim().length > 0;
+        // Validate attachments first so a bare attachment-only message can pass.
+        const projectAbs = path.join(projects.CODE_DIR, attachedProject);
+        const uploadsAbs = path.join(projectAbs, UPLOADS_DIRNAME) + path.sep;
+        const rawAttachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+        if (rawAttachments.length > 5) {
+          send({ type: 'error', message: 'too many attachments (max 5)' });
+          return;
+        }
+        const attachments = [];
+        for (const a of rawAttachments) {
+          if (!a || typeof a.absPath !== 'string') {
+            send({ type: 'error', message: 'invalid attachment entry' });
+            return;
+          }
+          const norm = path.resolve(a.absPath);
+          // Must live inside the project's uploads dir — block path traversal.
+          if (!norm.startsWith(uploadsAbs)) {
+            send({ type: 'error', message: 'attachment outside project uploads dir' });
+            return;
+          }
+          if (!fs.existsSync(norm)) {
+            send({ type: 'error', message: 'attachment missing on disk: ' + (a.name || '') });
+            return;
+          }
+          attachments.push({
+            name: typeof a.name === 'string' ? a.name : path.basename(norm),
+            absPath: norm,
+            mime: typeof a.mime === 'string' ? a.mime : null,
+            size: typeof a.size === 'number' ? a.size : null
+          });
+        }
+
+        if (!hasText && attachments.length === 0) {
           send({ type: 'error', message: 'text is empty' });
           return;
         }
-        if (Buffer.byteLength(text, 'utf8') > 100 * 1024) {
+        if (hasText && Buffer.byteLength(text, 'utf8') > 100 * 1024) {
           send({ type: 'error', message: 'text too large (max 100KB)' });
           return;
         }
 
+        // Build the prompt: @-references for each attachment, then user text.
+        const promptParts = [];
+        if (attachments.length > 0) {
+          promptParts.push(attachments.map((a) => '@' + a.absPath).join('\n'));
+        }
+        if (hasText) promptParts.push(text);
+        const prompt = promptParts.join('\n\n');
+
         const ts = new Date().toISOString();
-        const userEntry = { ts, kind: 'user_text', text };
+        const userEntry = { ts, kind: 'user_text', text: hasText ? text : '' };
+        if (attachments.length > 0) userEntry.attachments = attachments;
 
         // Persist and broadcast the user message
         projectStore.appendMessage(attachedProject, userEntry).catch((e) => {
           console.error('[chat] appendMessage error:', e);
         });
-        broadcast(entry, { type: 'event', kind: 'user_text', text, ts });
+        const broadcastPayload = { type: 'event', kind: 'user_text', text: userEntry.text, ts };
+        if (attachments.length > 0) broadcastPayload.attachments = attachments;
+        broadcast(entry, broadcastPayload);
 
         // Start runner
         const state = projectStore.getProjectState(attachedProject);
@@ -331,7 +376,7 @@ function attachWS(server) {
         let runner;
         try {
           runner = runClaude({
-            prompt: text,
+            prompt,
             cwd,
             sessionId: state.sessionId || null,
             signal: ac.signal
