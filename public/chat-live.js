@@ -25,7 +25,8 @@ const state = {
   connected: false,
   meta: null,
   sessionId: null,
-  cmux: { available: false, surfaceId: null, workspaceId: null }
+  cmux: { available: false, surfaceId: null, workspaceId: null },
+  tmux: { available: false, socketPath: null, paneId: null }
 };
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -948,12 +949,10 @@ function applyMeta(meta) {
   projectLabel.textContent = label;
   document.title = label + ' — Working in the Moon (live)';
 
-  if (meta.source) {
-    liveSourcePill.textContent = meta.source;
-    liveSourcePill.hidden = false;
-  } else {
-    liveSourcePill.hidden = true;
-  }
+  // Source chip: show "cmux", "tmux", or "terminal" based on availability.
+  // We derive it from meta fields rather than meta.source so it stays in sync
+  // with the input-bar enablement logic.
+  updateSourceChip(!!meta.cmuxAvailable, !!meta.tmuxAvailable);
 
   if (meta.cwd) {
     liveCwd.textContent = meta.cwd;
@@ -983,6 +982,11 @@ function applyMeta(meta) {
     surfaceId: meta.cmuxSurfaceId || null,
     workspaceId: meta.cmuxWorkspaceId || null
   });
+  applyTmuxMeta({
+    available: !!meta.tmuxAvailable,
+    socketPath: meta.tmuxSocketPath || null,
+    paneId: meta.tmuxPaneId || null
+  });
 }
 
 function applyBusyMeta(busy, idleSeconds) {
@@ -1002,33 +1006,67 @@ function applyBusyMeta(busy, idleSeconds) {
   }
 }
 
-// ─── cmux input bar ──────────────────────────────────────────────────────────
-function applyCmuxMeta(cmux) {
-  state.cmux = cmux || { available: false, surfaceId: null, workspaceId: null };
-  setCmuxStatus();
+// ─── cmux / tmux input bar ────────────────────────────────────────────────────
+
+// Returns true when at least one forwarding backend is active.
+function isForwardingAvailable() {
+  const cmuxOk = !!(state.cmux && state.cmux.available && state.cmux.surfaceId);
+  const tmuxOk = !!(state.tmux && state.tmux.available && state.tmux.paneId);
+  return cmuxOk || tmuxOk;
 }
 
-function setCmuxStatus() {
+function applyCmuxMeta(cmux) {
+  state.cmux = cmux || { available: false, surfaceId: null, workspaceId: null };
+  setInputBarStatus();
+}
+
+function applyTmuxMeta(tmux) {
+  state.tmux = tmux || { available: false, socketPath: null, paneId: null };
+  setInputBarStatus();
+}
+
+// Update the source chip (liveSourcePill) to show "cmux", "tmux", or "terminal".
+// Reuses the existing .live-source-pill element; does NOT recreate the DOM node.
+function updateSourceChip(cmuxAvail, tmuxAvail) {
+  if (!liveSourcePill) return;
+  let label, dataSource;
+  if (cmuxAvail) {
+    label = 'cmux';
+    dataSource = 'cmux';
+  } else if (tmuxAvail) {
+    label = 'tmux';
+    dataSource = 'tmux';
+  } else {
+    label = 'terminal';
+    dataSource = 'terminal';
+  }
+  liveSourcePill.textContent = label;
+  liveSourcePill.dataset.source = dataSource;
+  liveSourcePill.hidden = false;
+}
+
+function setInputBarStatus() {
   if (!liveTextarea || !liveSendBtn || !liveCmuxStatus) return;
-  const available = !!(state.cmux && state.cmux.available && state.cmux.surfaceId);
+  const available = isForwardingAvailable();
   if (available) {
     liveTextarea.disabled = false;
     liveCmuxStatus.classList.remove('unavailable');
+    const backend = (state.cmux && state.cmux.available && state.cmux.surfaceId) ? 'cmux' : 'tmux';
     liveCmuxStatus.textContent = isTouchDevice
-      ? 'cmux 연동 활성 — 전송 버튼으로 보내기'
-      : 'cmux 연동 활성 — Enter로 전송, Shift+Enter 줄바꿈';
+      ? backend + ' 연동 활성 — 전송 버튼으로 보내기'
+      : backend + ' 연동 활성 — Enter로 전송, Shift+Enter 줄바꿈';
     updateSendBtnEnabled();
   } else {
     liveTextarea.disabled = true;
     liveSendBtn.disabled = true;
     liveCmuxStatus.classList.add('unavailable');
-    liveCmuxStatus.textContent = 'cmux 연동 비활성 (외부 프로세스 종료 또는 cmux 미실행)';
+    liveCmuxStatus.textContent = '외부 세션 연결이 없습니다.';
   }
 }
 
 function updateSendBtnEnabled() {
   if (!liveSendBtn || !liveTextarea) return;
-  const available = !!(state.cmux && state.cmux.available && state.cmux.surfaceId);
+  const available = isForwardingAvailable();
   const hasText = liveTextarea.value.trim().length > 0;
   liveSendBtn.disabled = !(available && hasText);
 }
@@ -1046,15 +1084,15 @@ function sendLiveText() {
   const raw = liveTextarea.value;
   const text = raw.trim();
   if (!text) return;
-  if (!state.cmux || !state.cmux.available || !state.cmux.surfaceId) {
-    showToast('cmux 연동이 비활성 상태입니다.', 'error');
+  if (!isForwardingAvailable()) {
+    showToast('외부 세션 연결이 없습니다.', 'error');
     return;
   }
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
     showToast('연결이 끊어졌습니다.', 'error');
     return;
   }
-  // Trailing \n submits in claude TUI (cmux normalizes \n → \r for the pty).
+  // Trailing \n submits in claude TUI (cmux/tmux normalize \n → \r for the pty).
   state.ws.send(JSON.stringify({ type: 'send', text: text + '\n' }));
   liveTextarea.value = '';
   autoResizeLiveTextarea();
@@ -1140,17 +1178,33 @@ function openWS() {
         if ('cmuxAvailable' in msg) state.meta.cmuxAvailable = !!msg.cmuxAvailable;
         if ('cmuxSurfaceId' in msg) state.meta.cmuxSurfaceId = msg.cmuxSurfaceId || null;
         if ('cmuxWorkspaceId' in msg) state.meta.cmuxWorkspaceId = msg.cmuxWorkspaceId || null;
+        if ('tmuxAvailable' in msg) state.meta.tmuxAvailable = !!msg.tmuxAvailable;
+        if ('tmuxSocketPath' in msg) state.meta.tmuxSocketPath = msg.tmuxSocketPath || null;
+        if ('tmuxPaneId' in msg) state.meta.tmuxPaneId = msg.tmuxPaneId || null;
       }
       applyBusyMeta(msg.busy === true, msg.idleSeconds);
       if (msg.pid != null && livePid) livePid.textContent = 'PID ' + msg.pid;
-      // cmux fields are only included when the server detects a flip — but
-      // it's safe to call applyCmuxMeta whenever they are present.
+      // cmux/tmux fields are only included when the server detects a flip — but
+      // it's safe to call apply*Meta whenever they are present.
       if ('cmuxAvailable' in msg) {
         applyCmuxMeta({
           available: !!msg.cmuxAvailable,
           surfaceId: msg.cmuxSurfaceId || null,
           workspaceId: msg.cmuxWorkspaceId || null
         });
+      }
+      if ('tmuxAvailable' in msg) {
+        applyTmuxMeta({
+          available: !!msg.tmuxAvailable,
+          socketPath: msg.tmuxSocketPath || null,
+          paneId: msg.tmuxPaneId || null
+        });
+      }
+      // Re-sync source chip whenever either backend field arrives.
+      if ('cmuxAvailable' in msg || 'tmuxAvailable' in msg) {
+        const cmuxAvail = !!(state.meta && state.meta.cmuxAvailable);
+        const tmuxAvail = !!(state.meta && state.meta.tmuxAvailable);
+        updateSourceChip(cmuxAvail, tmuxAvail);
       }
       return;
     }
@@ -1159,8 +1213,10 @@ function openWS() {
       if (state.meta) state.meta.pid = null;
       if (livePid) livePid.textContent = '프로세스 종료됨';
       applyBusyMeta(false, null);
-      // Disable input — surface is gone.
+      // Disable input — all forwarding surfaces are gone.
       applyCmuxMeta({ available: false, surfaceId: null, workspaceId: null });
+      applyTmuxMeta({ available: false, socketPath: null, paneId: null });
+      updateSourceChip(false, false);
       return;
     }
     if (type === 'error') {

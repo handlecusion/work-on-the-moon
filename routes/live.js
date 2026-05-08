@@ -31,6 +31,7 @@ const session = require('../auth/session');
 const liveSessionScanner = require('../lib/liveSessionScanner');
 const liveTailer = require('../lib/liveTailer');
 const cmuxClient = require('../lib/cmuxClient');
+const tmuxClient = require('../lib/tmuxClient');
 const { loadEntireTranscript } = require('../lib/jsonlNormalizer');
 
 const router = express.Router();
@@ -132,7 +133,10 @@ function buildMeta(entry, fallback) {
       jsonlPath: entry.jsonlPath || null,
       cmuxAvailable: !!entry.cmuxAvailable,
       cmuxSurfaceId: entry.cmuxSurfaceId || null,
-      cmuxWorkspaceId: entry.cmuxWorkspaceId || null
+      cmuxWorkspaceId: entry.cmuxWorkspaceId || null,
+      tmuxAvailable: !!entry.tmuxAvailable,
+      tmuxSocketPath: entry.tmuxSocketPath || null,
+      tmuxPaneId: entry.tmuxPaneId || null
     };
   }
   // Fallback: process not found, but we have a jsonl path.
@@ -149,7 +153,10 @@ function buildMeta(entry, fallback) {
     jsonlPath: fallback.jsonlPath,
     cmuxAvailable: false,
     cmuxSurfaceId: null,
-    cmuxWorkspaceId: null
+    cmuxWorkspaceId: null,
+    tmuxAvailable: false,
+    tmuxSocketPath: null,
+    tmuxPaneId: null
   };
 }
 
@@ -265,12 +272,21 @@ function attachWS(server) {
     let lastBroadcastBusy = null;
     let lastBroadcastIdle = null;
     let lastBroadcastPid = null;
+    let lastBroadcastTmuxAvailable = null;
+    let lastBroadcastTmuxSocketPath = null;
+    let lastBroadcastTmuxPaneId = null;
     // Per-connection cmux state — refreshed on meta poll. surfaceId is what
     // we forward send/send_key to. cwd is captured for re-resolution.
     let cmuxState = {
       available: false,
       surfaceId: null,
       workspaceId: null
+    };
+    // Per-connection tmux state — fire-and-forget per call, no persistent socket.
+    let tmuxState = {
+      available: false,
+      socketPath: null,
+      paneId: null
     };
     let isAlive = true;
 
@@ -347,11 +363,25 @@ function attachWS(server) {
                 workspaceId: e2.cmuxWorkspaceId || null
               };
             }
+            const tmuxChanged2 = (!!e2.tmuxAvailable) !== tmuxState.available
+                || (e2.tmuxSocketPath || null) !== tmuxState.socketPath
+                || (e2.tmuxPaneId || null) !== tmuxState.paneId;
+            if (tmuxChanged2) {
+              tmuxState = {
+                available: !!e2.tmuxAvailable,
+                socketPath: e2.tmuxSocketPath || null,
+                paneId: e2.tmuxPaneId || null
+              };
+            }
             if (e2.busy !== lastBroadcastBusy
                 || e2.idleSeconds !== lastBroadcastIdle
-                || cmuxChanged2) {
+                || cmuxChanged2
+                || tmuxChanged2) {
               lastBroadcastBusy = e2.busy;
               lastBroadcastIdle = e2.idleSeconds;
+              lastBroadcastTmuxAvailable = tmuxState.available;
+              lastBroadcastTmuxSocketPath = tmuxState.socketPath;
+              lastBroadcastTmuxPaneId = tmuxState.paneId;
               send({
                 type: 'meta_update',
                 busy: e2.busy,
@@ -359,7 +389,10 @@ function attachWS(server) {
                 pid: e2.pid,
                 cmuxAvailable: cmuxState.available,
                 cmuxSurfaceId: cmuxState.surfaceId,
-                cmuxWorkspaceId: cmuxState.workspaceId
+                cmuxWorkspaceId: cmuxState.workspaceId,
+                tmuxAvailable: tmuxState.available,
+                tmuxSocketPath: tmuxState.socketPath,
+                tmuxPaneId: tmuxState.paneId
               });
             }
           }, META_DEBOUNCE_MS);
@@ -444,14 +477,27 @@ function attachWS(server) {
             send({ type: 'process_exit' });
             lastBroadcastPid = null;
           }
-          // Also flip cmux to unavailable so the input bar disables.
-          if (cmuxState.available) {
+          // Flip cmux and tmux to unavailable so the input bar disables.
+          const hadCmux = cmuxState.available;
+          const hadTmux = tmuxState.available;
+          if (hadCmux) {
             cmuxState = { available: false, surfaceId: null, workspaceId: null };
+          }
+          if (hadTmux) {
+            tmuxState = { available: false, socketPath: null, paneId: null };
+            lastBroadcastTmuxAvailable = false;
+            lastBroadcastTmuxSocketPath = null;
+            lastBroadcastTmuxPaneId = null;
+          }
+          if (hadCmux || hadTmux) {
             send({
               type: 'meta_update',
               cmuxAvailable: false,
               cmuxSurfaceId: null,
-              cmuxWorkspaceId: null
+              cmuxWorkspaceId: null,
+              tmuxAvailable: false,
+              tmuxSocketPath: null,
+              tmuxPaneId: null
             });
           }
           return;
@@ -469,14 +515,29 @@ function attachWS(server) {
           };
         }
 
-        // Broadcast a meta_update if busy/idle/pid OR cmux fields changed.
+        const tmuxChanged = (!!entry.tmuxAvailable) !== tmuxState.available
+            || (entry.tmuxSocketPath || null) !== tmuxState.socketPath
+            || (entry.tmuxPaneId || null) !== tmuxState.paneId;
+        if (tmuxChanged) {
+          tmuxState = {
+            available: !!entry.tmuxAvailable,
+            socketPath: entry.tmuxSocketPath || null,
+            paneId: entry.tmuxPaneId || null
+          };
+        }
+
+        // Broadcast a meta_update if busy/idle/pid OR cmux/tmux fields changed.
         if (entry.busy !== lastBroadcastBusy
             || entry.idleSeconds !== lastBroadcastIdle
             || entry.pid !== lastBroadcastPid
-            || cmuxChanged) {
+            || cmuxChanged
+            || tmuxChanged) {
           lastBroadcastBusy = entry.busy;
           lastBroadcastIdle = entry.idleSeconds;
           lastBroadcastPid = entry.pid;
+          lastBroadcastTmuxAvailable = tmuxState.available;
+          lastBroadcastTmuxSocketPath = tmuxState.socketPath;
+          lastBroadcastTmuxPaneId = tmuxState.paneId;
           send({
             type: 'meta_update',
             busy: entry.busy,
@@ -484,7 +545,10 @@ function attachWS(server) {
             pid: entry.pid,
             cmuxAvailable: cmuxState.available,
             cmuxSurfaceId: cmuxState.surfaceId,
-            cmuxWorkspaceId: cmuxState.workspaceId
+            cmuxWorkspaceId: cmuxState.workspaceId,
+            tmuxAvailable: tmuxState.available,
+            tmuxSocketPath: tmuxState.socketPath,
+            tmuxPaneId: tmuxState.paneId
           });
         }
       }, META_REFRESH_MS);
@@ -562,6 +626,14 @@ function attachWS(server) {
             surfaceId: entry.cmuxSurfaceId || null,
             workspaceId: entry.cmuxWorkspaceId || null
           };
+          tmuxState = {
+            available: !!entry.tmuxAvailable,
+            socketPath: entry.tmuxSocketPath || null,
+            paneId: entry.tmuxPaneId || null
+          };
+          lastBroadcastTmuxAvailable = tmuxState.available;
+          lastBroadcastTmuxSocketPath = tmuxState.socketPath;
+          lastBroadcastTmuxPaneId = tmuxState.paneId;
         } else {
           // jsonl-only fallback (process not found, but file exists for sid).
           const dirName = jsonlPath ? path.basename(path.dirname(jsonlPath)) : null;
@@ -602,20 +674,11 @@ function attachWS(server) {
         return;
       }
 
-      // ── Subsequent messages — cmux input forwarding ─────────────────
+      // ── Subsequent messages — input forwarding ──────────────────────
       const type = msg && msg.type;
 
       if (type === 'send' || type === 'send_key') {
-        if (!cmuxState.available || !cmuxState.surfaceId) {
-          send({ type: 'error', message: 'cmux 연동이 비활성 상태입니다.' });
-          return;
-        }
-        const ok = await ensureCmuxConnected();
-        if (!ok) {
-          send({ type: 'error', message: 'cmux 연결이 끊어졌습니다.' });
-          return;
-        }
-
+        // Validate payload first, before touching any transport.
         if (type === 'send') {
           const text = msg.text;
           if (typeof text !== 'string') {
@@ -626,26 +689,53 @@ function attachWS(server) {
             send({ type: 'error', message: 'send: text too large (max 10000 bytes)' });
             return;
           }
+        } else {
+          // type === 'send_key'
+          const key = msg.key;
+          if (typeof key !== 'string' || !ALLOWED_KEYS.has(key)) {
+            send({ type: 'error', message: 'send_key: key must be one of ' +
+              Array.from(ALLOWED_KEYS).join(', ') });
+            return;
+          }
+        }
+
+        // Routing priority: cmux > tmux > error.
+        if (cmuxState.available && cmuxState.surfaceId) {
+          const ok = await ensureCmuxConnected();
+          if (!ok) {
+            send({ type: 'error', message: 'cmux 연결이 끊어졌습니다.' });
+            return;
+          }
+          if (type === 'send') {
+            try {
+              await cmuxClient.sendText(cmuxState.surfaceId, msg.text);
+            } catch (err) {
+              send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
+            }
+          } else {
+            try {
+              await cmuxClient.sendKey(cmuxState.surfaceId, msg.key);
+            } catch (err) {
+              send({ type: 'error', message: '키 전송 실패: ' + (err && err.message ? err.message : String(err)) });
+            }
+          }
+          return;
+        }
+
+        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
           try {
-            await cmuxClient.sendText(cmuxState.surfaceId, text);
+            if (type === 'send') {
+              await tmuxClient.sendText(tmuxState.socketPath, tmuxState.paneId, msg.text);
+            } else {
+              await tmuxClient.sendKey(tmuxState.socketPath, tmuxState.paneId, msg.key);
+            }
           } catch (err) {
             send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
           }
           return;
         }
 
-        // type === 'send_key'
-        const key = msg.key;
-        if (typeof key !== 'string' || !ALLOWED_KEYS.has(key)) {
-          send({ type: 'error', message: 'send_key: key must be one of ' +
-            Array.from(ALLOWED_KEYS).join(', ') });
-          return;
-        }
-        try {
-          await cmuxClient.sendKey(cmuxState.surfaceId, key);
-        } catch (err) {
-          send({ type: 'error', message: '키 전송 실패: ' + (err && err.message ? err.message : String(err)) });
-        }
+        send({ type: 'error', message: '입력 forwarding이 비활성 상태입니다.' });
         return;
       }
 
