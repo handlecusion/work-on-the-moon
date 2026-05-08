@@ -61,12 +61,14 @@
     border-radius: 99px;
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     background: var(--accent-soft);
     color: var(--accent);
     border: 1px solid var(--accent);
     line-height: 1.4;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .live-source-pill {
     display: inline-flex;
@@ -140,7 +142,7 @@
         <i data-lucide="chevron-left"></i>
       </a>
       <span class="chat-project-name" id="projectNameLabel">—</span>
-      <span class="live-badge" id="liveBadge">라이브</span>
+      <span class="live-badge" id="liveBadge">LIVE</span>
       <span class="live-source-pill" id="liveSourcePill" hidden>—</span>
       <span class="conn-dot" id="connDot" data-state="connecting" aria-hidden="true"></span>
     </div>

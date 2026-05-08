@@ -705,6 +705,8 @@ function attachWS(server) {
       const type = msg && msg.type;
 
       if (type === 'send' || type === 'send_key') {
+        console.log('[live] %s received sid=%s cmuxAvail=%s tmuxAvail=%s tmuxPane=%s',
+          type, attachedSid || '(none)', cmuxState.available, tmuxState.available, tmuxState.paneId || '(none)');
         // Validate payload first, before touching any transport.
         if (type === 'send') {
           const text = msg.text;
@@ -753,15 +755,19 @@ function attachWS(server) {
           try {
             if (type === 'send') {
               await tmuxClient.sendText(tmuxState.socketPath, tmuxState.paneId, msg.text);
+              console.log('[live] tmux sendText OK pane=%s bytes=%d', tmuxState.paneId, Buffer.byteLength(msg.text, 'utf8'));
             } else {
               await tmuxClient.sendKey(tmuxState.socketPath, tmuxState.paneId, msg.key);
+              console.log('[live] tmux sendKey OK pane=%s key=%s', tmuxState.paneId, msg.key);
             }
           } catch (err) {
+            console.log('[live] tmux send FAIL: %s', err && err.message ? err.message : String(err));
             send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
           }
           return;
         }
 
+        console.log('[live] send rejected — no available transport');
         send({ type: 'error', message: '입력 forwarding이 비활성 상태입니다.' });
         return;
       }
