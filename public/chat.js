@@ -105,7 +105,7 @@ const sessionSwitcherList     = $('sessionSwitcherList');
 // ─── Project name from URL ────────────────────────────────────────────────────
 const projectName = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
 projectLabel.textContent = projectName;
-document.title = projectName + ' — Claude Web';
+document.title = projectName + ' — Working in the Moon';
 terminalLink.href = '/session/' + encodeURIComponent(projectName);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

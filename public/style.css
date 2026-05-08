@@ -197,6 +197,9 @@ input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   align-items: center;
   gap: 12px;
   padding: 12px 18px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(18px, env(safe-area-inset-left));
+  padding-right: max(18px, env(safe-area-inset-right));
 }
 .topbar .title {
   font-weight: 700;
@@ -206,6 +209,21 @@ input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   overflow: hidden;
   text-overflow: ellipsis;
   letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.moon-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  color: var(--fg);
+}
+.moon-icon-lg {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  color: var(--fg);
 }
 .topbar .title .path {
   font-family: var(--mono);
@@ -354,7 +372,12 @@ input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 @media (max-width: 600px) {
   .container { padding: 16px 12px; }
   .grid { grid-template-columns: 1fr 1fr; gap: 10px; }
-  .topbar { padding: 10px 12px; }
+  .topbar {
+    padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
   .topbar .actions a, .topbar .actions button { padding: 6px 10px; }
   .card { padding: 22px; }
 }

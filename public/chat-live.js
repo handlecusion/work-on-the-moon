@@ -68,7 +68,7 @@ state.cwd = null;
   const head = state.sessionId
     ? state.sessionId.slice(0, 8)
     : (state.cwd ? state.cwd.split('/').filter(Boolean).pop() : '');
-  document.title = (head || 'live') + ' — Claude Web';
+  document.title = (head || 'live') + ' — Working in the Moon';
 }
 
 // Defensive: force home navigation on back-button click. Some iOS Safari
@@ -946,7 +946,7 @@ function applyMeta(meta) {
     label = (meta.sessionId || '').slice(0, 8);
   }
   projectLabel.textContent = label;
-  document.title = label + ' — Claude Web (live)';
+  document.title = label + ' — Working in the Moon (live)';
 
   if (meta.source) {
     liveSourcePill.textContent = meta.source;
