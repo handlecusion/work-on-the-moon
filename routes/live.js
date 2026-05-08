@@ -32,7 +32,10 @@ const liveSessionScanner = require('../lib/liveSessionScanner');
 const liveTailer = require('../lib/liveTailer');
 const cmuxClient = require('../lib/cmuxClient');
 const tmuxClient = require('../lib/tmuxClient');
-const { loadEntireTranscript } = require('../lib/jsonlNormalizer');
+const jsonlNormalizer = require('../lib/jsonlNormalizer');
+const { loadEntireTranscript } = jsonlNormalizer;
+
+const INIT_LIMIT = 200;
 
 const router = express.Router();
 
@@ -263,6 +266,7 @@ function attachWS(server) {
     let attached = false;
     let attachedSid = null;
     let attachedCwd = null;
+    let attachedJsonlPath = null;
     let tailerHandle = null;
     let metaRefreshTimer = null;
     let metaDebounceTimer = null;
@@ -296,6 +300,7 @@ function attachWS(server) {
     }
 
     function closeWithError(message) {
+      console.log('[live] closing with error: %s', message);
       send({ type: 'error', message });
       send({ type: 'closed', reason: message });
       try { ws.close(); } catch (_) {}
@@ -332,9 +337,20 @@ function attachWS(server) {
       tailerHandle = await liveTailer.attach(jsonlPath, {
         onInit: (events) => {
           if (firstInit) { firstInit = false; return; }
-          // File appeared, was truncated, or replaced — re-send full init
+          // File appeared, was truncated, or replaced — re-send chunked init
           // using the latest meta we have.
-          send({ type: 'init', meta: lastMeta, transcript: events });
+          const total = events.length;
+          const startIdx = Math.max(0, total - INIT_LIMIT);
+          const initTranscript = events.slice(startIdx);
+          console.log('[live] init re-sent (tailer onInit) transcript=%d events oldestStartIdx=%d hasEarlier=%s',
+            initTranscript.length, startIdx, startIdx > 0);
+          send({
+            type: 'init',
+            meta: lastMeta,
+            transcript: initTranscript,
+            oldestStartIdx: startIdx,
+            hasEarlier: startIdx > 0
+          });
         },
         onEvent: (ev) => {
           if (!ev) return;
@@ -440,6 +456,7 @@ function attachWS(server) {
         if (pendingJsonlPath && fs.existsSync(pendingJsonlPath)) {
           const toAttach = pendingJsonlPath;
           pendingJsonlPath = null;
+          attachedJsonlPath = toAttach;
           clearInterval(fileWaitTimer);
           fileWaitTimer = null;
           try {
@@ -572,6 +589,7 @@ function attachWS(server) {
         }
         const sidArg = (typeof msg.sessionId === 'string') ? msg.sessionId : null;
         const cwdArg = (typeof msg.cwd === 'string') ? msg.cwd : null;
+        console.log('[live] hello sid=%s cwd=%s', sidArg || '(none)', cwdArg || '(none)');
         if (sidArg && !SESSION_ID_RE.test(sidArg)) {
           closeWithError('invalid sessionId');
           return;
@@ -617,6 +635,8 @@ function attachWS(server) {
         // Capture entry metadata for meta polling.
         let meta;
         if (entry) {
+          console.log('[live] entry-found pid=%s sid=%s cwd=%s tmuxAvail=%s cmuxAvail=%s',
+            entry.pid, entry.sessionId, entry.cwd, !!entry.tmuxAvailable, !!entry.cmuxAvailable);
           meta = buildMeta(entry, null);
           lastBroadcastBusy = entry.busy;
           lastBroadcastIdle = entry.idleSeconds;
@@ -636,6 +656,7 @@ function attachWS(server) {
           lastBroadcastTmuxPaneId = tmuxState.paneId;
         } else {
           // jsonl-only fallback (process not found, but file exists for sid).
+          console.log('[live] entry-not-found, using jsonl-only fallback path=%s', jsonlPath);
           const dirName = jsonlPath ? path.basename(path.dirname(jsonlPath)) : null;
           meta = buildMeta(null, {
             sessionId: resolvedSid,
@@ -649,12 +670,18 @@ function attachWS(server) {
         attachedCwd = resolvedCwd;
         lastMeta = meta;
 
-        // Send init synchronously. If the file exists, replay full transcript;
-        // otherwise send empty and let the lazy attach path re-emit init when
-        // the file appears.
+        // Send init synchronously. If the file exists, replay the most recent
+        // INIT_LIMIT events; otherwise send empty and let the lazy attach path
+        // re-emit init when the file appears.
         const fileExists = !!(jsonlPath && fs.existsSync(jsonlPath));
-        const transcript = fileExists ? loadEntireTranscript(jsonlPath) : [];
-        send({ type: 'init', meta, transcript });
+        if (fileExists) attachedJsonlPath = jsonlPath;
+        const allEvents = fileExists ? jsonlNormalizer.getCachedEvents(jsonlPath) : [];
+        const total = allEvents.length;
+        const startIdx = Math.max(0, total - INIT_LIMIT);
+        const transcript = allEvents.slice(startIdx);
+        console.log('[live] init sent transcript=%d events oldestStartIdx=%d hasEarlier=%s',
+          transcript.length, startIdx, startIdx > 0);
+        send({ type: 'init', meta, transcript, oldestStartIdx: startIdx, hasEarlier: startIdx > 0 });
 
         if (fileExists) {
           try {
@@ -736,6 +763,29 @@ function attachWS(server) {
         }
 
         send({ type: 'error', message: '입력 forwarding이 비활성 상태입니다.' });
+        return;
+      }
+
+      if (type === 'load_earlier') {
+        const before = Number(msg.before);
+        const limit = Math.min(Number(msg.limit) || INIT_LIMIT, 500);
+        if (!Number.isFinite(before) || before <= 0) {
+          send({ type: 'earlier_events', events: [], oldestStartIdx: 0, hasEarlier: false });
+          return;
+        }
+        let resolvedPath = null;
+        if (attachedJsonlPath) resolvedPath = attachedJsonlPath;
+        else if (attachedSid && attachedCwd) resolvedPath = jsonlPathFor(attachedCwd, attachedSid);
+        else if (attachedSid) resolvedPath = findJsonlPathBySessionId(attachedSid);
+        if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+          send({ type: 'earlier_events', events: [], oldestStartIdx: 0, hasEarlier: false });
+          return;
+        }
+        const allEvents = jsonlNormalizer.getCachedEvents(resolvedPath);
+        const newEnd = Math.min(before, allEvents.length);
+        const newStart = Math.max(0, newEnd - limit);
+        const events = allEvents.slice(newStart, newEnd);
+        send({ type: 'earlier_events', events, oldestStartIdx: newStart, hasEarlier: newStart > 0 });
         return;
       }
 

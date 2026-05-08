@@ -172,6 +172,10 @@
 <!-- ── Messages area ──────────────────────────────────────────── -->
 <main class="chat-messages" id="chatMessages" aria-live="polite">
   <div class="chat-messages-inner">
+    <button class="live-load-earlier" id="liveLoadEarlierBtn" type="button" hidden>
+      <i data-lucide="arrow-up"></i>
+      <span>이전 메시지 불러오기</span>
+    </button>
     <div class="chat-empty" id="emptyState">
       <i data-lucide="messages-square"></i>
       <span>전사 기록을 불러오는 중…</span>
@@ -200,7 +204,19 @@
 
 <!-- ── Input bar (cmux-routed) ────────────────────────────────── -->
 <footer class="chat-input-bar">
+  <!-- Pending attachments (chips, above the textarea) -->
+  <div class="chat-attach-strip" id="liveAttachStrip" hidden></div>
   <div class="chat-input-inner">
+    <button class="chat-attach-btn" id="liveAttachBtn" type="button" aria-label="파일 첨부" disabled>
+      <i data-lucide="paperclip"></i>
+    </button>
+    <input
+      type="file"
+      id="liveFileInput"
+      multiple
+      accept="image/*,application/pdf,text/*"
+      hidden
+    />
     <textarea
       id="liveTextarea"
       class="chat-textarea"
@@ -221,6 +237,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260508a"></script>
+<script src="/static/chat-live.js?v=20260508d"></script>
 </body>
 </html>

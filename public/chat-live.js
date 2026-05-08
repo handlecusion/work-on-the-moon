@@ -16,17 +16,33 @@
 // Initialise Lucide icons (first pass, before dynamic content)
 lucide.createIcons();
 
+// ─── Timeout constants ────────────────────────────────────────────────────────
+const WS_CONNECT_TIMEOUT_MS = 5000;
+const WS_INIT_TIMEOUT_MS    = 15000;
+
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
   pinned: true,
   hasMessages: false,
   reconnectAttempted: false,
+  _connectTimer: null,
+  _initTimer: null,
+  _lastFailReason: null,  // 'connect_timeout' | 'init_timeout' | null
   ws: null,
   connected: false,
   meta: null,
   sessionId: null,
   cmux: { available: false, surfaceId: null, workspaceId: null },
-  tmux: { available: false, socketPath: null, paneId: null }
+  tmux: { available: false, socketPath: null, paneId: null },
+
+  // Pagination state for server-side "load earlier" chunks
+  transcript: { oldestStartIdx: 0, hasEarlier: false, loading: false },
+
+  // Pending file attachments (uploaded before send)
+  attach: {
+    pending: [],    // [{ id, name, mime, size, status, absPath, thumbUrl, error, xhr }]
+    nextLocalId: 1,
+  },
 };
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -48,6 +64,10 @@ const connDot         = $('connDot');
 const liveTextarea    = $('liveTextarea');
 const liveSendBtn     = $('liveSendBtn');
 const liveCmuxStatus  = $('liveCmuxStatus');
+const liveAttachStrip    = $('liveAttachStrip');
+const liveAttachBtn      = $('liveAttachBtn');
+const liveFileInput      = $('liveFileInput');
+const liveLoadEarlierBtn = $('liveLoadEarlierBtn');
 
 // ─── Session ID / cwd from URL ────────────────────────────────────────────────
 // Two URL shapes:
@@ -1006,6 +1026,275 @@ function applyBusyMeta(busy, idleSeconds) {
   }
 }
 
+// ─── Attachments ─────────────────────────────────────────────────────────────
+
+const ATTACH_LIMIT      = 5;
+const ATTACH_MAX_BYTES  = 10 * 1024 * 1024;
+const ALLOWED_MIME_PREFIX = ['image/', 'application/pdf', 'text/'];
+
+function isAllowedMime(mime) {
+  if (!mime) return false;
+  return ALLOWED_MIME_PREFIX.some((p) => mime === p || mime.startsWith(p));
+}
+
+function formatBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function getLiveProjectName() {
+  if (state.meta && state.meta.cwd) {
+    const parts = state.meta.cwd.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : null;
+  }
+  return null;
+}
+
+function renderLiveAttachStrip() {
+  if (!liveAttachStrip) return;
+  if (state.attach.pending.length === 0) {
+    liveAttachStrip.setAttribute('hidden', '');
+    liveAttachStrip.innerHTML = '';
+    return;
+  }
+  liveAttachStrip.removeAttribute('hidden');
+  liveAttachStrip.innerHTML = '';
+  for (const a of state.attach.pending) {
+    const chip = document.createElement('div');
+    chip.className = 'chat-attach-chip' + (a.status === 'error' ? ' error' : '');
+    chip.dataset.id = String(a.id);
+
+    const thumb = document.createElement('div');
+    thumb.className = 'chat-attach-chip-thumb';
+    if (a.thumbUrl) {
+      const img = document.createElement('img');
+      img.src = a.thumbUrl;
+      img.alt = '';
+      thumb.appendChild(img);
+    } else {
+      thumb.innerHTML = '<i data-lucide="file"></i>';
+    }
+    chip.appendChild(thumb);
+
+    const meta = document.createElement('div');
+    meta.className = 'chat-attach-chip-meta';
+    const name = document.createElement('span');
+    name.className = 'chat-attach-chip-name';
+    name.textContent = a.name;
+    meta.appendChild(name);
+    const sub = document.createElement('span');
+    sub.className = 'chat-attach-chip-sub';
+    if (a.status === 'uploading') sub.textContent = '업로드 중…';
+    else if (a.status === 'error') sub.textContent = a.error || '오류';
+    else sub.textContent = formatBytes(a.size);
+    meta.appendChild(sub);
+    chip.appendChild(meta);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'chat-attach-chip-remove';
+    removeBtn.setAttribute('aria-label', '제거');
+    removeBtn.innerHTML = '<i data-lucide="x"></i>';
+    removeBtn.addEventListener('click', () => removeLiveAttachment(a.id));
+    chip.appendChild(removeBtn);
+
+    if (a.status === 'uploading') {
+      const bar = document.createElement('div');
+      bar.className = 'chat-attach-chip-progress';
+      bar.style.width = (a.progress || 5) + '%';
+      chip.appendChild(bar);
+    }
+
+    liveAttachStrip.appendChild(chip);
+  }
+  renderIcons();
+}
+
+function removeLiveAttachment(id) {
+  const idx = state.attach.pending.findIndex((a) => a.id === id);
+  if (idx === -1) return;
+  const a = state.attach.pending[idx];
+  if (a.thumbUrl) { try { URL.revokeObjectURL(a.thumbUrl); } catch (_) {} }
+  if (a.xhr && a.status === 'uploading') {
+    try { a.xhr.abort(); } catch (_) {}
+  }
+  state.attach.pending.splice(idx, 1);
+  renderLiveAttachStrip();
+  updateSendBtnEnabled();
+}
+
+function uploadOneLiveFile(file) {
+  if (state.attach.pending.length >= ATTACH_LIMIT) {
+    showToast('첨부는 최대 ' + ATTACH_LIMIT + '개까지 가능합니다.', 'info');
+    return;
+  }
+  if (file.size > ATTACH_MAX_BYTES) {
+    showToast(file.name + ' 은(는) 너무 큽니다 (최대 10MB)', 'error');
+    return;
+  }
+  if (!isAllowedMime(file.type)) {
+    showToast('지원하지 않는 형식: ' + (file.type || '알 수 없음'), 'error');
+    return;
+  }
+
+  const projectName = getLiveProjectName();
+  if (!projectName) {
+    showToast('프로젝트를 식별할 수 없습니다.', 'error');
+    return;
+  }
+
+  const localId = state.attach.nextLocalId++;
+  const isImage = file.type.startsWith('image/');
+  const thumbUrl = isImage ? URL.createObjectURL(file) : null;
+
+  const entry = {
+    id: localId,
+    name: file.name || 'file',
+    mime: file.type || 'application/octet-stream',
+    size: file.size,
+    status: 'uploading',
+    progress: 5,
+    absPath: null,
+    thumbUrl,
+    error: null,
+    xhr: null,
+  };
+  state.attach.pending.push(entry);
+  renderLiveAttachStrip();
+  updateSendBtnEnabled();
+
+  const xhr = new XMLHttpRequest();
+  entry.xhr = xhr;
+  xhr.open('POST', '/api/projects/' + encodeURIComponent(projectName) + '/upload');
+  xhr.upload.addEventListener('progress', (e) => {
+    if (!e.lengthComputable) return;
+    entry.progress = Math.max(5, Math.round((e.loaded / e.total) * 100));
+    const chip = liveAttachStrip && liveAttachStrip.querySelector('.chat-attach-chip[data-id="' + entry.id + '"] .chat-attach-chip-progress');
+    if (chip) chip.style.width = entry.progress + '%';
+  });
+  xhr.onload = () => {
+    entry.xhr = null;
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        const f = (data.files || [])[0];
+        if (f && f.absPath) {
+          entry.status = 'ready';
+          entry.absPath = f.absPath;
+          if (typeof f.name === 'string') entry.name = f.name;
+          if (typeof f.size === 'number') entry.size = f.size;
+          if (typeof f.mime === 'string') entry.mime = f.mime;
+        } else {
+          entry.status = 'error';
+          entry.error = '서버 응답 오류';
+        }
+      } catch (_) {
+        entry.status = 'error';
+        entry.error = '서버 응답 파싱 실패';
+      }
+    } else {
+      entry.status = 'error';
+      try {
+        const data = JSON.parse(xhr.responseText);
+        entry.error = data.error || ('HTTP ' + xhr.status);
+      } catch (_) {
+        entry.error = 'HTTP ' + xhr.status;
+      }
+      showToast('업로드 실패: ' + entry.error, 'error');
+    }
+    renderLiveAttachStrip();
+    updateSendBtnEnabled();
+  };
+  xhr.onerror = () => {
+    entry.xhr = null;
+    entry.status = 'error';
+    entry.error = '네트워크 오류';
+    renderLiveAttachStrip();
+    updateSendBtnEnabled();
+  };
+
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  xhr.send(fd);
+}
+
+function handleLiveFileList(fileList) {
+  if (!fileList) return;
+  const files = Array.from(fileList);
+  for (const f of files) {
+    if (state.attach.pending.length >= ATTACH_LIMIT) {
+      showToast('첨부 한도 도달 (최대 ' + ATTACH_LIMIT + '개)', 'info');
+      break;
+    }
+    uploadOneLiveFile(f);
+  }
+}
+
+if (liveAttachBtn && liveFileInput) {
+  liveAttachBtn.addEventListener('click', () => {
+    liveFileInput.click();
+  });
+  liveFileInput.addEventListener('change', () => {
+    handleLiveFileList(liveFileInput.files);
+    liveFileInput.value = '';
+  });
+}
+
+// Paste support: capture image/file blobs from the clipboard.
+if (liveTextarea) {
+  liveTextarea.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items || items.length === 0) return;
+    const files = [];
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      for (const f of files) uploadOneLiveFile(f);
+    }
+  });
+}
+
+// Drag-and-drop support: accept drop anywhere on the page.
+{
+  let liveDragDepth = 0;
+  function isFileDrag(e) {
+    if (!e.dataTransfer) return false;
+    return Array.from(e.dataTransfer.types || []).includes('Files');
+  }
+  window.addEventListener('dragenter', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    liveDragDepth++;
+    document.querySelector('.chat-page')?.classList.add('drop-target');
+  });
+  window.addEventListener('dragover', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!isFileDrag(e)) return;
+    liveDragDepth = Math.max(0, liveDragDepth - 1);
+    if (liveDragDepth === 0) {
+      document.querySelector('.chat-page')?.classList.remove('drop-target');
+    }
+  });
+  window.addEventListener('drop', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    liveDragDepth = 0;
+    document.querySelector('.chat-page')?.classList.remove('drop-target');
+    if (e.dataTransfer && e.dataTransfer.files) handleLiveFileList(e.dataTransfer.files);
+  });
+}
+
 // ─── cmux / tmux input bar ────────────────────────────────────────────────────
 
 // Returns true when at least one forwarding backend is active.
@@ -1050,6 +1339,7 @@ function setInputBarStatus() {
   const available = isForwardingAvailable();
   if (available) {
     liveTextarea.disabled = false;
+    if (liveAttachBtn) liveAttachBtn.disabled = false;
     liveCmuxStatus.classList.remove('unavailable');
     const backend = (state.cmux && state.cmux.available && state.cmux.surfaceId) ? 'cmux' : 'tmux';
     liveCmuxStatus.textContent = isTouchDevice
@@ -1058,6 +1348,7 @@ function setInputBarStatus() {
     updateSendBtnEnabled();
   } else {
     liveTextarea.disabled = true;
+    if (liveAttachBtn) liveAttachBtn.disabled = true;
     liveSendBtn.disabled = true;
     liveCmuxStatus.classList.add('unavailable');
     liveCmuxStatus.textContent = '외부 세션 연결이 없습니다.';
@@ -1068,7 +1359,9 @@ function updateSendBtnEnabled() {
   if (!liveSendBtn || !liveTextarea) return;
   const available = isForwardingAvailable();
   const hasText = liveTextarea.value.trim().length > 0;
-  liveSendBtn.disabled = !(available && hasText);
+  const hasReady = state.attach.pending.some((a) => a.status === 'ready');
+  const anyUploading = state.attach.pending.some((a) => a.status === 'uploading');
+  liveSendBtn.disabled = !(available && (hasText || hasReady) && !anyUploading);
 }
 
 function autoResizeLiveTextarea() {
@@ -1081,9 +1374,11 @@ function autoResizeLiveTextarea() {
 
 function sendLiveText() {
   if (!liveTextarea) return;
-  const raw = liveTextarea.value;
-  const text = raw.trim();
-  if (!text) return;
+  const ready = state.attach.pending.filter((a) => a.status === 'ready');
+  const anyUploading = state.attach.pending.some((a) => a.status === 'uploading');
+  if (anyUploading) return;
+  const rawText = liveTextarea.value.trim();
+  if (!rawText && ready.length === 0) return;
   if (!isForwardingAvailable()) {
     showToast('외부 세션 연결이 없습니다.', 'error');
     return;
@@ -1092,9 +1387,21 @@ function sendLiveText() {
     showToast('연결이 끊어졌습니다.', 'error');
     return;
   }
+  // Prepend @-prefixed absolute paths so the claude TUI picks them up as file refs.
+  let text = rawText;
+  if (ready.length > 0) {
+    const refs = ready.map((a) => '@' + a.absPath).join('\n');
+    text = text ? (refs + '\n' + text) : refs;
+  }
   // Trailing \n submits in claude TUI (cmux/tmux normalize \n → \r for the pty).
   state.ws.send(JSON.stringify({ type: 'send', text: text + '\n' }));
   liveTextarea.value = '';
+  // Clear attachments — revoke thumb URLs first.
+  for (const a of state.attach.pending) {
+    if (a.thumbUrl) { try { URL.revokeObjectURL(a.thumbUrl); } catch (_) {} }
+  }
+  state.attach.pending = [];
+  renderLiveAttachStrip();
   autoResizeLiveTextarea();
   updateSendBtnEnabled();
 }
@@ -1131,6 +1438,32 @@ if (liveSendBtn) {
   liveSendBtn.addEventListener('click', () => { sendLiveText(); });
 }
 
+// ─── Server-side lazy load earlier ───────────────────────────────────────────
+function loadEarlier() {
+  if (state.transcript.loading || !state.transcript.hasEarlier) return;
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  state.transcript.loading = true;
+  if (liveLoadEarlierBtn) liveLoadEarlierBtn.disabled = true;
+  state.ws.send(JSON.stringify({
+    type: 'load_earlier',
+    before: state.transcript.oldestStartIdx,
+    limit: 200
+  }));
+}
+
+// Wire the load-earlier button and set up an IntersectionObserver so scrolling
+// to the top automatically triggers the fetch (same UX as most chat apps).
+if (liveLoadEarlierBtn) {
+  liveLoadEarlierBtn.addEventListener('click', loadEarlier);
+
+  const _loadEarlierObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) loadEarlier();
+    }
+  }, { root: chatMessages, threshold: 0 });
+  _loadEarlierObserver.observe(liveLoadEarlierBtn);
+}
+
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function openWS() {
   setConnState('connecting');
@@ -1138,13 +1471,25 @@ function openWS() {
   const ws = new WebSocket(proto + '://' + location.host + '/ws/live');
   state.ws = ws;
 
+  state._connectTimer = setTimeout(() => {
+    console.warn('[chat-live] WS open timeout — closing');
+    state._lastFailReason = 'connect_timeout';
+    try { ws.close(); } catch (_) {}
+  }, WS_CONNECT_TIMEOUT_MS);
+
   ws.addEventListener('open', () => {
+    if (state._connectTimer) { clearTimeout(state._connectTimer); state._connectTimer = null; }
     state.reconnectAttempted = false;
     setConnState('connected');
     const hello = { type: 'hello' };
     if (state.sessionId) hello.sessionId = state.sessionId;
     else if (state.cwd) hello.cwd = state.cwd;
     ws.send(JSON.stringify(hello));
+    state._initTimer = setTimeout(() => {
+      console.warn('[chat-live] init timeout — closing');
+      state._lastFailReason = 'init_timeout';
+      try { ws.close(); } catch (_) {}
+    }, WS_INIT_TIMEOUT_MS);
   });
 
   ws.addEventListener('message', (ev) => {
@@ -1153,9 +1498,19 @@ function openWS() {
     const type = msg.type;
 
     if (type === 'init') {
+      if (state._initTimer) { clearTimeout(state._initTimer); state._initTimer = null; }
+      state._lastFailReason = null;
       // Apply meta synchronously so the input bar / cmux status / connection
       // dot reflect reality immediately.
       applyMeta(msg.meta);
+      // Update server-side pagination state.
+      state.transcript.oldestStartIdx = msg.oldestStartIdx != null ? msg.oldestStartIdx : 0;
+      state.transcript.hasEarlier = !!msg.hasEarlier;
+      state.transcript.loading = false;
+      if (liveLoadEarlierBtn) {
+        liveLoadEarlierBtn.hidden = !state.transcript.hasEarlier;
+        liveLoadEarlierBtn.disabled = false;
+      }
       // Defer transcript render to the next paint tick so the meta DOM updates
       // become visible BEFORE the (potentially heavy) chunked render begins.
       // Without this, on long transcripts the user sees "cmux 연동 확인 중…"
@@ -1164,6 +1519,43 @@ function openWS() {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => renderTranscript(events));
       });
+      return;
+    }
+    if (type === 'earlier_events') {
+      const innerEl = getMessagesInner();
+      const prevScrollHeight = chatMessages.scrollHeight;
+      const prevScrollTop = chatMessages.scrollTop;
+
+      // Render events into a fragment via the appendTargetOverride mechanism.
+      const frag = document.createDocumentFragment();
+      const prevTarget = appendTargetOverride;
+      appendTargetOverride = frag;
+      try {
+        for (const ev of (msg.events || [])) renderEvent(ev);
+      } finally {
+        appendTargetOverride = prevTarget;
+      }
+
+      // Prepend fragment as first content child after the load-earlier button.
+      const anchor = liveLoadEarlierBtn && liveLoadEarlierBtn.parentNode === innerEl
+        ? liveLoadEarlierBtn.nextSibling
+        : innerEl.firstChild;
+      innerEl.insertBefore(frag, anchor);
+
+      // Restore scroll position so existing content doesn't jump.
+      const newScrollHeight = chatMessages.scrollHeight;
+      chatMessages.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+
+      // Update pagination state.
+      state.transcript.oldestStartIdx = msg.oldestStartIdx != null ? msg.oldestStartIdx : 0;
+      state.transcript.hasEarlier = !!msg.hasEarlier;
+      state.transcript.loading = false;
+      if (liveLoadEarlierBtn) {
+        liveLoadEarlierBtn.hidden = !state.transcript.hasEarlier;
+        liveLoadEarlierBtn.disabled = false;
+      }
+
+      renderIcons();
       return;
     }
     if (type === 'event') {
@@ -1230,6 +1622,8 @@ function openWS() {
   });
 
   ws.addEventListener('close', () => {
+    if (state._connectTimer) { clearTimeout(state._connectTimer); state._connectTimer = null; }
+    if (state._initTimer)    { clearTimeout(state._initTimer);    state._initTimer = null; }
     state.ws = null;
     setConnState('disconnected');
     if (!state.reconnectAttempted) {
@@ -1242,6 +1636,17 @@ function openWS() {
         }
       }, 2000);
     } else {
+      if (disconnectBanner) {
+        const bannerText = disconnectBanner.querySelector('span');
+        if (bannerText) {
+          if (state._lastFailReason === 'connect_timeout') {
+            bannerText.textContent = '서버 연결이 지연되고 있습니다. 새로고침하세요.';
+          } else if (state._lastFailReason === 'init_timeout') {
+            bannerText.textContent = '응답이 너무 오래 걸립니다. 새로고침하세요.';
+          }
+          // else: keep the existing default text ("연결이 끊어졌습니다. 새로고침하세요.")
+        }
+      }
       showDisconnectBanner();
     }
   });
