@@ -789,9 +789,16 @@ function attachWS(server) {
         const total = allEvents.length;
         const startIdx = Math.max(0, total - INIT_LIMIT);
         const transcript = allEvents.slice(startIdx);
+        // Earlier events may exist either inside the cache window (when the
+        // cold load returned more than INIT_LIMIT) or on disk before the
+        // window's head. Either case warrants the UI's "load earlier" CTA.
+        const earlierOnDisk = fileExists && typeof norm.hasEarlierEvents === 'function'
+          ? norm.hasEarlierEvents(jsonlPath)
+          : false;
+        const hasEarlier = startIdx > 0 || earlierOnDisk;
         console.log('[live] init sent agent=%s transcript=%d events oldestStartIdx=%d hasEarlier=%s',
-          attachedAgent, transcript.length, startIdx, startIdx > 0);
-        send({ type: 'init', meta, transcript, oldestStartIdx: startIdx, hasEarlier: startIdx > 0 });
+          attachedAgent, transcript.length, startIdx, hasEarlier);
+        send({ type: 'init', meta, transcript, oldestStartIdx: startIdx, hasEarlier });
 
         if (fileExists) {
           try {
@@ -906,11 +913,31 @@ function attachWS(server) {
           return;
         }
         const norm = pickNormalizer(attachedAgent);
-        const allEvents = norm.getCachedEvents(resolvedPath);
-        const newEnd = Math.min(before, allEvents.length);
+        const cachedBefore = norm.getCachedEvents(resolvedPath);
+        const lenBefore = cachedBefore.length;
+        // Expand the cache backwards if needed so we have enough events to
+        // satisfy a `before` request from the client. When the file's
+        // already fully loaded this is a no-op.
+        let allEvents = cachedBefore;
+        if (typeof norm.ensureCount === 'function') {
+          allEvents = norm.ensureCount(resolvedPath, Math.max(0, before) + limit);
+        }
+        // If we prepended events on this call, the client's `before` index
+        // (relative to the previous cache) shifts by `prepended`.
+        const prepended = allEvents.length - lenBefore;
+        const beforeAbs = Math.max(0, before) + prepended;
+        const newEnd = Math.min(beforeAbs, allEvents.length);
         const newStart = Math.max(0, newEnd - limit);
         const events = allEvents.slice(newStart, newEnd);
-        send({ type: 'earlier_events', events, oldestStartIdx: newStart, hasEarlier: newStart > 0 });
+        const earlierOnDisk = typeof norm.hasEarlierEvents === 'function'
+          ? norm.hasEarlierEvents(resolvedPath)
+          : false;
+        send({
+          type: 'earlier_events',
+          events,
+          oldestStartIdx: newStart,
+          hasEarlier: newStart > 0 || earlierOnDisk
+        });
         return;
       }
 
