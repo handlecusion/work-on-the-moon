@@ -41,13 +41,15 @@ router.get('/api/sessions', session.requireAuth, async (req, res) => {
 
   const items = [];
   for (const name of names) {
-    for (const agent of ['claude', 'codex']) {
+    for (const agent of ['claude', 'codex', 'hermes']) {
       const state = projectStore.getProjectState(name, agent);
       const busy = chat.isProjectBusy(name, agent);
 
-      // Skip empty codex slots — only emit the claude row for projects with no
-      // activity so every project still shows a claude entry in "all projects".
-      if (agent === 'codex' && state.messageLog.length === 0 && !state.sessionId && !busy) {
+      // Only emit non-claude rows when the project actually has activity in
+      // that agent. This keeps the "모든 프로젝트" list at one row per project
+      // while still surfacing per-agent rows in "최근 대화" once they exist.
+      if ((agent === 'codex' || agent === 'hermes') &&
+          state.messageLog.length === 0 && !state.sessionId && !busy) {
         continue;
       }
 

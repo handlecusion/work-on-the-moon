@@ -3,7 +3,9 @@
   const PATHS = {
     claude: '/static/icons/anthropic.svg',
     codex:  '/static/icons/openai.svg',
+    hermes: '/static/icons/hermes.svg',
   };
+  const ALTS = { claude: 'claude', codex: 'codex', hermes: 'hermes' };
   function pathFor(agent) {
     return PATHS[agent] || PATHS.claude;
   }
@@ -16,7 +18,7 @@
   function setAgentMark(imgEl, agent) {
     if (!imgEl) return;
     imgEl.setAttribute('src', pathFor(agent));
-    imgEl.setAttribute('alt', agent === 'codex' ? 'codex' : 'claude');
+    imgEl.setAttribute('alt', ALTS[agent] || ALTS.claude);
     imgEl.removeAttribute('hidden');
   }
   window.AgentIcons = { pathFor, setFavicon, setAgentMark };

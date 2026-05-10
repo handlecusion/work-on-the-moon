@@ -10,12 +10,13 @@ const session = require('../auth/session');
 const projects = require('./projects');
 const { runClaude } = require('../lib/claudeRunner');
 const { runCodex } = require('../lib/codexRunner');
+const { runHermes } = require('../lib/hermesRunner');
 const projectStore = require('../lib/projectStore');
 const swapper = require('../lib/authSwapper');
 const skillCache = require('../lib/skillCache');
 const { UPLOADS_DIRNAME } = require('./uploads');
 
-const VALID_AGENTS = new Set(['claude', 'codex']);
+const VALID_AGENTS = new Set(['claude', 'codex', 'hermes']);
 const DEFAULT_AGENT = 'claude';
 
 function parseAgent(value) {
@@ -347,9 +348,10 @@ function attachWS(server) {
         const uploadsAbs = path.join(projectAbs, UPLOADS_DIRNAME) + path.sep;
         const rawAttachments = Array.isArray(msg.attachments) ? msg.attachments : [];
         // Codex `exec` doesn't accept image arrays the way claude does — fail
-        // cleanly rather than silently dropping the user's files.
-        if (attachedAgent === 'codex' && rawAttachments.length > 0) {
-          send({ type: 'error', message: 'attachments not yet supported for codex' });
+        // cleanly rather than silently dropping the user's files. Hermes
+        // chat -q mode also doesn't take image attachments today.
+        if ((attachedAgent === 'codex' || attachedAgent === 'hermes') && rawAttachments.length > 0) {
+          send({ type: 'error', message: 'attachments not yet supported for ' + attachedAgent });
           return;
         }
         if (rawAttachments.length > 5) {
@@ -425,6 +427,13 @@ function attachWS(server) {
         try {
           if (agent === 'codex') {
             runner = runCodex({
+              prompt,
+              cwd,
+              sessionId: state.sessionId || null,
+              signal: ac.signal
+            });
+          } else if (agent === 'hermes') {
+            runner = runHermes({
               prompt,
               cwd,
               sessionId: state.sessionId || null,

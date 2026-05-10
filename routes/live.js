@@ -35,16 +35,22 @@ const tmuxClient = require('../lib/tmuxClient');
 const jsonlNormalizer = require('../lib/jsonlNormalizer');
 const codexJsonlNormalizer = require('../lib/codexJsonlNormalizer');
 const codexSessionScanner = require('../lib/codexSessionScanner');
+const hermesJsonlNormalizer = require('../lib/hermesJsonlNormalizer');
+const hermesSessionScanner = require('../lib/hermesSessionScanner');
 
 function pickNormalizer(agent) {
-  return agent === 'codex' ? codexJsonlNormalizer : jsonlNormalizer;
+  if (agent === 'codex')  return codexJsonlNormalizer;
+  if (agent === 'hermes') return hermesJsonlNormalizer;
+  return jsonlNormalizer;
 }
 
 const INIT_LIMIT = 200;
 
 const router = express.Router();
 
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Accept either a claude/codex UUID or a hermes timestamped id
+// (YYYYMMDD_HHMMSS_<6-8 hex>).
+const SESSION_ID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9]{8}_[0-9]{6}_[0-9a-f]{6,8})$/;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const META_REFRESH_MS = 10 * 1000;
 const META_DEBOUNCE_MS = 1000;
@@ -148,6 +154,11 @@ async function resolveAgentForSessionId(sessionId) {
   const codexPath = codexSessionScanner.findCodexJsonlBySessionId(sessionId);
   if (codexPath) {
     return { agent: 'codex', jsonlPath: codexPath, entry: null };
+  }
+
+  const hermesPath = hermesSessionScanner.findHermesJsonlBySessionId(sessionId);
+  if (hermesPath) {
+    return { agent: 'hermes', jsonlPath: hermesPath, entry: null };
   }
 
   return null;
@@ -277,6 +288,10 @@ router.get('/api/live/:sessionId', session.requireAuth, async (req, res) => {
   } else if (resolved.agent === 'codex') {
     const head = codexSessionScanner._internal.parseCodexHead(resolved.jsonlPath);
     cwd = head ? head.cwd : null;
+  } else if (resolved.agent === 'hermes') {
+    // Hermes session_meta has no cwd; we can't recover it once the process
+    // is gone. Leave null — the UI will hide cwd-dependent features.
+    cwd = null;
   }
   return res.json(buildMeta(null, {
     sessionId: sid,
@@ -697,6 +712,12 @@ function attachWS(server) {
               if (codexPath) {
                 jsonlPath = codexPath;
                 agent = 'codex';
+              } else {
+                const hermesPath = hermesSessionScanner.findHermesJsonlBySessionId(resolvedSid);
+                if (hermesPath) {
+                  jsonlPath = hermesPath;
+                  agent = 'hermes';
+                }
               }
             }
           }
@@ -743,6 +764,7 @@ function attachWS(server) {
               const head = codexSessionScanner._internal.parseCodexHead(jsonlPath);
               cwdGuess = head ? head.cwd : null;
             }
+            // hermes: no cwd recoverable from jsonl head
           }
           meta = buildMeta(null, {
             sessionId: resolvedSid,
@@ -872,6 +894,8 @@ function attachWS(server) {
           resolvedPath = attachedJsonlPath;
         } else if (attachedAgent === 'codex' && attachedSid) {
           resolvedPath = codexSessionScanner.findCodexJsonlBySessionId(attachedSid);
+        } else if (attachedAgent === 'hermes' && attachedSid) {
+          resolvedPath = hermesSessionScanner.findHermesJsonlBySessionId(attachedSid);
         } else if (attachedSid && attachedCwd) {
           resolvedPath = jsonlPathFor(attachedCwd, attachedSid);
         } else if (attachedSid) {

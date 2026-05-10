@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <!--
+    Hermes mark — winged staff (caduceus, simplified).
+    Central vertical bar = the staff. Two ellipses at the top = stylized
+    wings. A small disc above the staff = the orb. No snakes — keeps the
+    glyph readable at 16-18px next to the OpenAI flower and Anthropic wave.
+  -->
+  <g transform="translate(12,12)">
+    <!-- staff -->
+    <rect x="-1" y="-3" width="2" height="9" rx="1"/>
+    <!-- orb -->
+    <circle cx="0" cy="-5.5" r="1.6"/>
+    <!-- left wing -->
+    <ellipse cx="-3.6" cy="-3" rx="3" ry="1.4" transform="rotate(-15)"/>
+    <!-- right wing -->
+    <ellipse cx="3.6" cy="-3" rx="3" ry="1.4" transform="rotate(15)"/>
+    <!-- foot serifs -->
+    <rect x="-2.4" y="6" width="4.8" height="1.4" rx="0.6"/>
+  </g>
+</svg>

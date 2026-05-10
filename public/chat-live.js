@@ -997,7 +997,9 @@ function applyMeta(meta) {
   liveAgent = agent;
   const agentIconSrc = agent === 'codex'
     ? '/static/icons/openai.svg'
-    : '/static/icons/anthropic.svg';
+    : (agent === 'hermes'
+        ? '/static/icons/hermes.svg'
+        : '/static/icons/anthropic.svg');
   if (agentMark) {
     agentMark.src = agentIconSrc;
     agentMark.hidden = false;

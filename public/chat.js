@@ -127,16 +127,19 @@ projectLabel.textContent = projectName;
 terminalLink.href = '/session/' + encodeURIComponent(projectName);
 
 // ─── Agent resolution from URL param ─────────────────────────────────────────
-const VALID_AGENTS = new Set(['claude', 'codex']);
+const VALID_AGENTS = new Set(['claude', 'codex', 'hermes']);
 const _urlAgent = new URLSearchParams(location.search).get('agent') || '';
 let agent = VALID_AGENTS.has(_urlAgent) ? _urlAgent : 'claude';
 
 const agentMark = $('agentMark');
 const favicon   = $('favicon');
 
+const AGENT_ICON = { claude: 'anthropic', codex: 'openai', hermes: 'hermes' };
+const AGENTS_NO_ATTACH = new Set(['codex', 'hermes']);
+
 function applyAgent(a) {
   agent = a;
-  const iconFile = a === 'codex' ? 'openai' : 'anthropic';
+  const iconFile = AGENT_ICON[a] || 'anthropic';
   // Header icon
   if (agentMark) {
     agentMark.src = '/static/icons/' + iconFile + '.svg';
@@ -147,22 +150,23 @@ function applyAgent(a) {
     favicon.href = '/static/icons/' + iconFile + '.svg';
   }
   // Title
-  const agentLabel = a === 'codex' ? 'codex' : 'claude';
+  const agentLabel = a;
   document.title = projectName
     ? projectName + ' (' + agentLabel + ') — Working in the Moon'
     : 'Working in the Moon — Chat (' + agentLabel + ')';
-  // Attach button: codex doesn't support attachments yet
+  // Attach button: codex/hermes don't support attachments today
   if (chatAttachBtn) {
-    if (a === 'codex') {
+    if (AGENTS_NO_ATTACH.has(a)) {
       chatAttachBtn.disabled = true;
-      chatAttachBtn.title = 'attachments not yet supported for codex';
+      chatAttachBtn.title = 'attachments not yet supported for ' + a;
     } else {
       chatAttachBtn.disabled = false;
       chatAttachBtn.title = '';
     }
   }
-  // Clear any stale pending attachments when switching to codex
-  if (a === 'codex' && state.attach.pending.length > 0) {
+  // Clear any stale pending attachments when switching to an agent that
+  // can't accept them.
+  if (AGENTS_NO_ATTACH.has(a) && state.attach.pending.length > 0) {
     for (const att of state.attach.pending) {
       if (att.thumbUrl) { try { URL.revokeObjectURL(att.thumbUrl); } catch (_) {} }
     }
@@ -173,8 +177,10 @@ function applyAgent(a) {
   // Highlight toggle buttons
   const btnClaude = $('agentToggleClaude');
   const btnCodex  = $('agentToggleCodex');
+  const btnHermes = $('agentToggleHermes');
   if (btnClaude) btnClaude.classList.toggle('active', a === 'claude');
   if (btnCodex)  btnCodex.classList.toggle('active',  a === 'codex');
+  if (btnHermes) btnHermes.classList.toggle('active', a === 'hermes');
 }
 
 // Apply initial agent on page load
@@ -1910,6 +1916,7 @@ newChatBtn.addEventListener('click', () => {
 (function wireAgentToggle() {
   const btnClaude = $('agentToggleClaude');
   const btnCodex  = $('agentToggleCodex');
+  const btnHermes = $('agentToggleHermes');
   if (!btnClaude || !btnCodex) return;
 
   function switchAgent(newAgent) {
@@ -1922,6 +1929,7 @@ newChatBtn.addEventListener('click', () => {
 
   btnClaude.addEventListener('click', () => switchAgent('claude'));
   btnCodex.addEventListener('click',  () => switchAgent('codex'));
+  if (btnHermes) btnHermes.addEventListener('click', () => switchAgent('hermes'));
 })();
 
 logoutBtn.addEventListener('click', async () => {

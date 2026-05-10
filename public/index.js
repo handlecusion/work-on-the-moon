@@ -79,7 +79,7 @@ function renderSessionList(container, items, opts) {
     if (activeName && it.name === activeName) classes.push('active');
 
     const agent = it.agent || 'claude';
-    const agentIcon = agent === 'codex' ? 'openai' : 'anthropic';
+    const agentIcon = agent === 'codex' ? 'openai' : (agent === 'hermes' ? 'hermes' : 'anthropic');
 
     html.push(
       '<a class="' + classes.join(' ') + '" ' +
@@ -136,7 +136,7 @@ function renderLocalList(container, items) {
       : (cwd ? '/chat-live-cwd/' + encodeURIComponent(cwd) : '#');
 
     const localAgent = it.agent || 'claude';
-    const localAgentIcon = localAgent === 'codex' ? 'openai' : 'anthropic';
+    const localAgentIcon = localAgent === 'codex' ? 'openai' : (localAgent === 'hermes' ? 'hermes' : 'anthropic');
 
     html.push(
       '<a class="' + classes.join(' ') + '" ' +
@@ -193,8 +193,10 @@ window.__renderSessionList = renderSessionList;
   const titleEl   = document.getElementById('agentPickerTitle');
   const claudeEl  = document.getElementById('agentPickerClaude');
   const codexEl   = document.getElementById('agentPickerCodex');
+  const hermesEl  = document.getElementById('agentPickerHermes');
   const claudeMeta = document.getElementById('agentPickerClaudeMeta');
   const codexMeta  = document.getElementById('agentPickerCodexMeta');
+  const hermesMeta = document.getElementById('agentPickerHermesMeta');
   const closeBtn  = document.getElementById('agentPickerClose');
 
   function metaText(agentData) {
@@ -243,9 +245,11 @@ window.__renderSessionList = renderSessionList;
     const base = '/chat/' + encodeURIComponent(projectName);
     claudeEl.href = base + '?agent=claude';
     codexEl.href  = base + '?agent=codex';
+    if (hermesEl) hermesEl.href = base + '?agent=hermes';
 
     claudeMeta.textContent = metaText(agentMeta.claude);
     codexMeta.textContent  = metaText(agentMeta.codex);
+    if (hermesMeta) hermesMeta.textContent = metaText(agentMeta.hermes);
 
     openSheet();
   };
