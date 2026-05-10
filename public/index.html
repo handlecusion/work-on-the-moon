@@ -13,14 +13,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=20260510c" />
 </head>
 <body>
 <div class="topbar">
-  <div class="title"><svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg><span>Working in the Moon</span></div>
-  <div class="actions">
-    <a href="/devices">기기 관리</a>
-    <button id="logoutBtn">로그아웃</button>
+  <div class="topbar-inner">
+    <div class="title"><svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg><span>Working in the Moon</span></div>
+    <div class="actions">
+      <a href="/devices">기기 관리</a>
+      <button id="logoutBtn">로그아웃</button>
+    </div>
   </div>
 </div>
 
@@ -41,7 +43,40 @@
   </section>
 </main>
 
+<!-- ─── Agent picker bottom sheet ─────────────────────────────────────── -->
+<div id="agentPickerBackdrop" class="agent-picker-backdrop" aria-hidden="true"></div>
+<div id="agentPickerSheet" class="agent-picker-sheet" role="dialog" aria-modal="true" aria-label="에이전트 선택" hidden>
+  <div class="agent-picker-handle"></div>
+  <div class="agent-picker-header">
+    <span class="agent-picker-title" id="agentPickerTitle">프로젝트 열기</span>
+    <button class="agent-picker-close" id="agentPickerClose" aria-label="닫기">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="agent-picker-body">
+    <a id="agentPickerClaude" class="agent-picker-option" href="#" data-agent="claude">
+      <img class="agent-picker-icon agent-mark" src="/static/icons/anthropic.svg" alt="Anthropic" aria-hidden="true">
+      <div class="agent-picker-info">
+        <div class="agent-picker-name">Claude</div>
+        <div class="agent-picker-sub">Open with Claude Code</div>
+        <div class="agent-picker-meta" id="agentPickerClaudeMeta"></div>
+      </div>
+      <svg class="agent-picker-chevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+    <div class="agent-picker-divider"></div>
+    <a id="agentPickerCodex" class="agent-picker-option" href="#" data-agent="codex">
+      <img class="agent-picker-icon agent-mark" src="/static/icons/openai.svg" alt="OpenAI" aria-hidden="true">
+      <div class="agent-picker-info">
+        <div class="agent-picker-name">Codex</div>
+        <div class="agent-picker-sub">Open with codex</div>
+        <div class="agent-picker-meta" id="agentPickerCodexMeta"></div>
+      </div>
+      <svg class="agent-picker-chevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
-<script src="/static/index.js?v=20260502b"></script>
+<script src="/static/index.js?v=20260510c"></script>
 </body>
 </html>

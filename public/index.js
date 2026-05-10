@@ -78,11 +78,16 @@ function renderSessionList(container, items, opts) {
     if (it.busy) classes.push('busy');
     if (activeName && it.name === activeName) classes.push('active');
 
+    const agent = it.agent || 'claude';
+    const agentIcon = agent === 'codex' ? 'openai' : 'anthropic';
+
     html.push(
       '<a class="' + classes.join(' ') + '" ' +
         'href="/chat/' + encodeURIComponent(it.name) + '" ' +
         'data-name="' + escapeHtml(it.name) + '" ' +
+        'data-agent="' + escapeHtml(agent) + '" ' +
         'role="option">' +
+        '<img class="agent-mark" src="/static/icons/' + agentIcon + '.svg" alt="' + escapeHtml(agent) + '" aria-hidden="true">' +
         '<span class="session-row-dot" data-state="' + ds + '" aria-hidden="true"></span>' +
         '<div class="session-row-main">' +
           '<div class="session-row-title">' + escapeHtml(it.name) + '</div>' +
@@ -130,13 +135,18 @@ function renderLocalList(container, items) {
       ? '/chat-live/' + encodeURIComponent(sid)
       : (cwd ? '/chat-live-cwd/' + encodeURIComponent(cwd) : '#');
 
+    const localAgent = it.agent || 'claude';
+    const localAgentIcon = localAgent === 'codex' ? 'openai' : 'anthropic';
+
     html.push(
       '<a class="' + classes.join(' ') + '" ' +
         'href="' + escapeHtml(href) + '" ' +
         'data-sid="' + escapeHtml(sid) + '" ' +
         'data-cwd="' + escapeHtml(cwd) + '" ' +
+        'data-agent="' + escapeHtml(localAgent) + '" ' +
         'title="' + escapeHtml(it.cwd || '') + '" ' +
         'role="option">' +
+        '<img class="agent-mark" src="/static/icons/' + localAgentIcon + '.svg" alt="' + escapeHtml(localAgent) + '" aria-hidden="true">' +
         '<span class="session-row-dot" data-state="' + ds + '" aria-hidden="true"></span>' +
         '<div class="session-row-main">' +
           '<div class="session-row-title-line">' +
@@ -175,6 +185,78 @@ function renderLocalList(container, items) {
 }
 
 window.__renderSessionList = renderSessionList;
+
+// ─── Agent picker sheet ───────────────────────────────────────────────────────
+(function () {
+  const backdrop  = document.getElementById('agentPickerBackdrop');
+  const sheet     = document.getElementById('agentPickerSheet');
+  const titleEl   = document.getElementById('agentPickerTitle');
+  const claudeEl  = document.getElementById('agentPickerClaude');
+  const codexEl   = document.getElementById('agentPickerCodex');
+  const claudeMeta = document.getElementById('agentPickerClaudeMeta');
+  const codexMeta  = document.getElementById('agentPickerCodexMeta');
+  const closeBtn  = document.getElementById('agentPickerClose');
+
+  function metaText(agentData) {
+    if (!agentData || (!agentData.lastUsedAt && !agentData.messageCount)) {
+      return '처음 시작';
+    }
+    const parts = [];
+    if (agentData.lastUsedAt) parts.push(formatRelativeTime(agentData.lastUsedAt));
+    if (agentData.messageCount != null && agentData.messageCount > 0) {
+      parts.push(agentData.messageCount + ' messages');
+    }
+    return parts.join(' · ');
+  }
+
+  function openSheet() {
+    backdrop.style.display = 'block';
+    sheet.hidden = false;
+    document.body.classList.add('agent-picker-open');
+    // rAF so display:block is committed before transition starts
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        backdrop.classList.add('visible');
+        sheet.classList.add('visible');
+      });
+    });
+    const closeEl = sheet.querySelector('.agent-picker-close');
+    if (closeEl) closeEl.focus();
+  }
+
+  function closeSheet() {
+    backdrop.classList.remove('visible');
+    sheet.classList.remove('visible');
+    document.body.classList.remove('agent-picker-open');
+    const onEnd = () => {
+      backdrop.style.display = 'none';
+      sheet.hidden = true;
+      sheet.removeEventListener('transitionend', onEnd);
+    };
+    sheet.addEventListener('transitionend', onEnd);
+  }
+
+  window.openAgentPicker = function openAgentPicker(projectName, agentMeta) {
+    agentMeta = agentMeta || {};
+    titleEl.textContent = projectName;
+
+    const base = '/chat/' + encodeURIComponent(projectName);
+    claudeEl.href = base + '?agent=claude';
+    codexEl.href  = base + '?agent=codex';
+
+    claudeMeta.textContent = metaText(agentMeta.claude);
+    codexMeta.textContent  = metaText(agentMeta.codex);
+
+    openSheet();
+  };
+
+  closeBtn.addEventListener('click', closeSheet);
+  backdrop.addEventListener('click', closeSheet);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !sheet.hidden) closeSheet();
+  });
+}());
 
 // iOS Safari aggressively serves pages from the back-forward cache, which
 // restores DOM with stale click handlers and bypasses Cache-Control. Force a
@@ -271,12 +353,40 @@ async function load(opts) {
       renderLocalList(localList, local);
     }
 
-    // All projects
+    // All projects — build per-name agentMeta map then wire picker
     if (all.length === 0) {
       allSection.style.display = 'none';
     } else {
       allSection.style.display = '';
-      renderSessionList(allList, all, { mode: 'home' });
+      // Aggregate both claude + codex entries per project name
+      const agentMetaByName = {};
+      for (const it of all) {
+        const n = it.name;
+        if (!agentMetaByName[n]) agentMetaByName[n] = {};
+        const agentKey = (it.agent || 'claude').toLowerCase();
+        agentMetaByName[n][agentKey] = {
+          lastUsedAt:   it.lastUsedAt   || null,
+          messageCount: it.messageCount || 0,
+        };
+      }
+      // Deduplicate by name for rendering (show one row per project)
+      const seen = new Set();
+      const dedupedAll = all.filter((it) => {
+        if (seen.has(it.name)) return false;
+        seen.add(it.name);
+        return true;
+      });
+      renderSessionList(allList, dedupedAll, { mode: 'home' });
+
+      // Intercept clicks → open picker instead of navigating
+      allList.querySelectorAll('a.session-row').forEach((a) => {
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          const name = a.getAttribute('data-name') || a.dataset.name || '';
+          if (!name) return;
+          window.openAgentPicker(name, agentMetaByName[name] || {});
+        });
+      });
     }
 
     if (window.lucide) lucide.createIcons();

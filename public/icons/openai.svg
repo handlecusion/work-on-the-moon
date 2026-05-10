@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <!--
+    OpenAI mark — six-petal radial flower (simplified knot).
+    Six ellipses arranged at 60-degree intervals around center (12,12).
+    Each petal is an ellipse rotated to point outward from center.
+    Rendered as a single compound path using overlapping ellipse approximations.
+  -->
+  <g transform="translate(12,12)">
+    <!-- petal 0deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(0)"/>
+    <!-- petal 60deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(60)"/>
+    <!-- petal 120deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(120)"/>
+    <!-- petal 180deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(180)"/>
+    <!-- petal 240deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(240)"/>
+    <!-- petal 300deg -->
+    <ellipse cx="0" cy="-4.2" rx="2.2" ry="3.6" transform="rotate(300)"/>
+    <!-- center circle to unify petals -->
+    <circle cx="0" cy="0" r="2.8"/>
+  </g>
+</svg>

@@ -35,6 +35,7 @@ const state = {
     filtered: [],   // current filtered+sorted list (top 30)
     activeIndex: 0,
     fetched: false,
+    fetchedAgent: null, // which agent the cache was fetched for
   },
 
   // Pending attachments (uploaded before send)
@@ -123,8 +124,61 @@ const sessionSwitcherList     = $('sessionSwitcherList');
 // ─── Project name from URL ────────────────────────────────────────────────────
 const projectName = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
 projectLabel.textContent = projectName;
-document.title = projectName + ' — Working in the Moon';
 terminalLink.href = '/session/' + encodeURIComponent(projectName);
+
+// ─── Agent resolution from URL param ─────────────────────────────────────────
+const VALID_AGENTS = new Set(['claude', 'codex']);
+const _urlAgent = new URLSearchParams(location.search).get('agent') || '';
+let agent = VALID_AGENTS.has(_urlAgent) ? _urlAgent : 'claude';
+
+const agentMark = $('agentMark');
+const favicon   = $('favicon');
+
+function applyAgent(a) {
+  agent = a;
+  const iconFile = a === 'codex' ? 'openai' : 'anthropic';
+  // Header icon
+  if (agentMark) {
+    agentMark.src = '/static/icons/' + iconFile + '.svg';
+    agentMark.style.display = '';
+  }
+  // Favicon
+  if (favicon) {
+    favicon.href = '/static/icons/' + iconFile + '.svg';
+  }
+  // Title
+  const agentLabel = a === 'codex' ? 'codex' : 'claude';
+  document.title = projectName
+    ? projectName + ' (' + agentLabel + ') — Working in the Moon'
+    : 'Working in the Moon — Chat (' + agentLabel + ')';
+  // Attach button: codex doesn't support attachments yet
+  if (chatAttachBtn) {
+    if (a === 'codex') {
+      chatAttachBtn.disabled = true;
+      chatAttachBtn.title = 'attachments not yet supported for codex';
+    } else {
+      chatAttachBtn.disabled = false;
+      chatAttachBtn.title = '';
+    }
+  }
+  // Clear any stale pending attachments when switching to codex
+  if (a === 'codex' && state.attach.pending.length > 0) {
+    for (const att of state.attach.pending) {
+      if (att.thumbUrl) { try { URL.revokeObjectURL(att.thumbUrl); } catch (_) {} }
+    }
+    state.attach.pending = [];
+    renderAttachStrip();
+    updateSendBtn();
+  }
+  // Highlight toggle buttons
+  const btnClaude = $('agentToggleClaude');
+  const btnCodex  = $('agentToggleCodex');
+  if (btnClaude) btnClaude.classList.toggle('active', a === 'claude');
+  if (btnCodex)  btnCodex.classList.toggle('active',  a === 'codex');
+}
+
+// Apply initial agent on page load
+applyAgent(agent);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function escapeHtml(s) {
@@ -1308,7 +1362,7 @@ function openWS() {
   ws.addEventListener('open', () => {
     state.reconnectAttempted = false;
     setConnState('connected');
-    ws.send(JSON.stringify({ type: 'hello', project: projectName }));
+    ws.send(JSON.stringify({ type: 'hello', project: projectName, agent }));
     // Request current auth status
     ws.send(JSON.stringify({ type: 'authStatus' }));
   });
@@ -1320,6 +1374,10 @@ function openWS() {
     const type = msg.type;
 
     if (type === 'history') {
+      // Trust server's agent value (URL param may be stale)
+      if (msg.agent && VALID_AGENTS.has(msg.agent) && msg.agent !== agent) {
+        applyAgent(msg.agent);
+      }
       renderHistory(msg.messages || []);
       setBusy(msg.busy === true);
       return;
@@ -1388,6 +1446,12 @@ function wsSend(obj) {
 
 refreshBtn.addEventListener('click', () => {
   location.reload();
+});
+
+// iOS Safari aggressively serves pages from BFCache; force reload on restore
+// so chat state and the new agent/icon code don't stay stale on back-nav.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) location.reload();
 });
 
 // ─── Send message ─────────────────────────────────────────────────────────────
@@ -1841,6 +1905,24 @@ newChatBtn.addEventListener('click', () => {
     state.ws.send(JSON.stringify({ type: 'newChat' }));
   }
 });
+
+// ─── Agent toggle (popover segmented control) ─────────────────────────────────
+(function wireAgentToggle() {
+  const btnClaude = $('agentToggleClaude');
+  const btnCodex  = $('agentToggleCodex');
+  if (!btnClaude || !btnCodex) return;
+
+  function switchAgent(newAgent) {
+    if (newAgent === agent) { closePopover(); return; }
+    // Navigate to same path with new ?agent= param; reload loads fresh session
+    const url = new URL(location.href);
+    url.searchParams.set('agent', newAgent);
+    location.href = url.toString();
+  }
+
+  btnClaude.addEventListener('click', () => switchAgent('claude'));
+  btnCodex.addEventListener('click',  () => switchAgent('codex'));
+})();
 
 logoutBtn.addEventListener('click', async () => {
   closePopover();
@@ -2439,39 +2521,44 @@ function renderSwapCancelled() {
 
 // ─── Slash command picker ────────────────────────────────────────────────────
 
-// Fetch commands once per page load
+// Fetch commands once per agent (re-fetches on agent change or after a failure)
 function fetchSlashCommands() {
-  if (state.slash.fetched) return;
-  state.slash.fetched = true; // mark immediately to avoid double-fetch
+  if (state.slash.fetched && state.slash.fetchedAgent === agent) return;
+  state.slash.fetched = true; // mark in-flight to avoid double-fetch
+  state.slash.fetchedAgent = agent;
 
-  fetch('/api/slash-commands', { credentials: 'same-origin' })
+  fetch('/api/slash-commands?agent=' + encodeURIComponent(agent), { credentials: 'same-origin' })
     .then((r) => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     })
     .then((data) => {
-      const kindOrder = { 'built-in': 0, plugin: 1, skill: 2, custom: 3, agent: 4 };
-      const all = [
+      const kindOrder = { 'built-in': 0, builtin: 0, plugin: 1, skill: 2, custom: 3, agent: 4 };
+      const all = Array.isArray(data) ? data : [
         ...(data.built_in || []),
         ...(data.plugins  || []),
         ...(data.skills   || []),
         ...(data.custom   || []),
         ...(data.agents   || []),
       ];
-      // Dedupe by name
       const seen = new Set();
       state.slash.items = all.filter((item) => {
         if (seen.has(item.name)) return false;
         seen.add(item.name);
         return true;
       }).sort((a, b) => {
-        const ko = (kindOrder[a.kind] || 99) - (kindOrder[b.kind] || 99);
+        const ko = (kindOrder[a.kind] ?? 99) - (kindOrder[b.kind] ?? 99);
         if (ko !== 0) return ko;
         return a.name.localeCompare(b.name);
       });
+      // If picker is already open (user typed `/` before fetch resolved), re-render
+      // it now that items are populated.
+      if (state.slash.open) updateSlashPicker();
     })
     .catch(() => {
-      // Silently fail — picker just shows nothing
+      // Reset so the next focus / picker open retries instead of staying empty.
+      state.slash.fetched = false;
+      state.slash.fetchedAgent = null;
     });
 }
 
@@ -2581,6 +2668,8 @@ function renderSlashList() {
 function openSlashPicker() {
   slashPicker.hidden = false;
   state.slash.open = true;
+  // Safety net: ensure the catalog is being fetched. No-op if already cached.
+  fetchSlashCommands();
 }
 
 function closeSlashPicker() {
@@ -2628,10 +2717,12 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Lazy fetch on first textarea focus
+// Lazy fetch on textarea focus. Listener stays attached so a failed first
+// fetch can retry on a later focus (fetchSlashCommands is idempotent — it
+// early-returns when items are already cached for the current agent).
 chatTextarea.addEventListener('focus', () => {
   fetchSlashCommands();
-}, { once: true });
+});
 
 // ─── iOS / mobile keyboard handling ──────────────────────────────────────────
 if (window.visualViewport) {

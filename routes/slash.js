@@ -8,6 +8,7 @@ const os = require('os');
 const session = require('../auth/session');
 const builtinSlash = require('../lib/builtinSlash');
 const skillCache = require('../lib/skillCache');
+const { listCodexSlash } = require('../lib/codexSlash');
 
 const router = express.Router();
 
@@ -204,6 +205,11 @@ function loadPluginCommands() {
 // ---------------------------------------------------------------------------
 
 router.get('/api/slash-commands', session.requireAuth, (req, res) => {
+  const agent = req.query.agent || 'claude';
+  if (agent === 'codex') {
+    return res.json(listCodexSlash());
+  }
+
   const cache = skillCache.get();
 
   const builtIn = builtinSlash.map((c) => ({

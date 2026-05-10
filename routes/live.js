@@ -33,7 +33,12 @@ const liveTailer = require('../lib/liveTailer');
 const cmuxClient = require('../lib/cmuxClient');
 const tmuxClient = require('../lib/tmuxClient');
 const jsonlNormalizer = require('../lib/jsonlNormalizer');
-const { loadEntireTranscript } = jsonlNormalizer;
+const codexJsonlNormalizer = require('../lib/codexJsonlNormalizer');
+const codexSessionScanner = require('../lib/codexSessionScanner');
+
+function pickNormalizer(agent) {
+  return agent === 'codex' ? codexJsonlNormalizer : jsonlNormalizer;
+}
 
 const INIT_LIMIT = 200;
 
@@ -110,6 +115,45 @@ function findJsonlPathBySessionId(sessionId) {
 }
 
 /**
+ * Resolve a sessionId to { agent, jsonlPath, entry } by checking, in order:
+ *   1. The live scanner — entries carry agent + jsonlPath directly.
+ *   2. Claude jsonl tree — by far the more common case on disk.
+ *   3. Codex jsonl tree — walks ~/.codex/sessions/ for `*-<sid>.jsonl`.
+ *
+ * Returns { agent, jsonlPath, entry } where entry may be null when the
+ * process is not running but the jsonl exists. Returns null only when the
+ * sessionId is unknown to all three sources.
+ */
+async function resolveAgentForSessionId(sessionId) {
+  let live;
+  try {
+    live = await liveSessionScanner.scanLive();
+  } catch (_) {
+    live = null;
+  }
+  const entry = findLiveEntryBySessionId(live, sessionId);
+  if (entry) {
+    return {
+      agent: entry.agent || 'claude',
+      jsonlPath: entry.jsonlPath || null,
+      entry
+    };
+  }
+
+  const claudePath = findJsonlPathBySessionId(sessionId);
+  if (claudePath) {
+    return { agent: 'claude', jsonlPath: claudePath, entry: null };
+  }
+
+  const codexPath = codexSessionScanner.findCodexJsonlBySessionId(sessionId);
+  if (codexPath) {
+    return { agent: 'codex', jsonlPath: codexPath, entry: null };
+  }
+
+  return null;
+}
+
+/**
  * Decode an encoded directory name back to a cwd path.
  *   '-Users-alice-Code-foo' → '/Users/alice/Code/foo'
  */
@@ -134,6 +178,7 @@ function buildMeta(entry, fallback) {
       startedAt: entry.startedAt || null,
       lastActivityTs: entry.lastActivityTs || null,
       jsonlPath: entry.jsonlPath || null,
+      agent: entry.agent || 'claude',
       cmuxAvailable: !!entry.cmuxAvailable,
       cmuxSurfaceId: entry.cmuxSurfaceId || null,
       cmuxWorkspaceId: entry.cmuxWorkspaceId || null,
@@ -154,6 +199,7 @@ function buildMeta(entry, fallback) {
     startedAt: null,
     lastActivityTs: null,
     jsonlPath: fallback.jsonlPath,
+    agent: fallback.agent || 'claude',
     cmuxAvailable: false,
     cmuxSurfaceId: null,
     cmuxWorkspaceId: null,
@@ -207,29 +253,36 @@ router.get('/api/live/:sessionId', session.requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'invalid sessionId' });
   }
 
-  let live;
+  let resolved;
   try {
-    live = await liveSessionScanner.scanLive();
+    resolved = await resolveAgentForSessionId(sid);
   } catch (e) {
     return res.status(500).json({ error: 'scanLive failed: ' + e.message });
   }
-
-  const entry = findLiveEntryBySessionId(live, sid);
-  if (entry) {
-    return res.json(buildMeta(entry, null));
-  }
-
-  // Process not running — but jsonl may still exist for read-only viewing.
-  const jsonlPath = findJsonlPathBySessionId(sid);
-  if (!jsonlPath) {
+  if (!resolved) {
     return res.status(404).json({ error: 'session not found' });
   }
-  // Derive cwd best-effort from the directory name.
-  const dirName = path.basename(path.dirname(jsonlPath));
+
+  if (resolved.entry) {
+    return res.json(buildMeta(resolved.entry, null));
+  }
+
+  // Process not running — but jsonl exists for read-only viewing.
+  // For claude, derive cwd best-effort from the directory name. For codex,
+  // the cwd lives inside the head's session_meta payload.
+  let cwd = null;
+  if (resolved.agent === 'claude') {
+    const dirName = path.basename(path.dirname(resolved.jsonlPath));
+    cwd = decodeEncodedCwd(dirName);
+  } else if (resolved.agent === 'codex') {
+    const head = codexSessionScanner._internal.parseCodexHead(resolved.jsonlPath);
+    cwd = head ? head.cwd : null;
+  }
   return res.json(buildMeta(null, {
     sessionId: sid,
-    cwd: decodeEncodedCwd(dirName),
-    jsonlPath
+    cwd,
+    jsonlPath: resolved.jsonlPath,
+    agent: resolved.agent
   }));
 });
 
@@ -267,6 +320,7 @@ function attachWS(server) {
     let attachedSid = null;
     let attachedCwd = null;
     let attachedJsonlPath = null;
+    let attachedAgent = 'claude';   // 'claude' or 'codex' — fixed once known
     let tailerHandle = null;
     let metaRefreshTimer = null;
     let metaDebounceTimer = null;
@@ -417,7 +471,7 @@ function attachWS(server) {
           send({ type: 'closed', reason: 'transcript file removed' });
           try { ws.close(); } catch (_) {}
         }
-      });
+      }, { normalizer: pickNormalizer(attachedAgent) });
     }
 
     // ── Wait for the jsonl file to appear, then lazy-attach ──────────
@@ -607,7 +661,7 @@ function attachWS(server) {
           return;
         }
 
-        // Locate the running claude entry by sid OR cwd.
+        // Locate the running entry (claude or codex) by sid OR cwd.
         const entry = sidArg
           ? findLiveEntryBySessionId(live, sidArg)
           : findLiveEntryByCwd(live, cwdArg);
@@ -616,14 +670,36 @@ function attachWS(server) {
         const resolvedSid = sidArg || (entry && entry.sessionId) || null;
         const resolvedCwd = (entry && entry.cwd) || cwdArg || null;
 
-        // Compute the best-guess jsonl path.
+        // Determine agent. When the live entry is found, trust its tag.
+        // Otherwise (sid-only, no live process), probe both jsonl trees.
+        let agent = (entry && entry.agent) || 'claude';
         let jsonlPath = null;
         if (entry && entry.jsonlPath) {
           jsonlPath = entry.jsonlPath;
-        } else if (resolvedSid && resolvedCwd) {
-          jsonlPath = jsonlPathFor(resolvedCwd, resolvedSid);
         } else if (resolvedSid) {
-          jsonlPath = findJsonlPathBySessionId(resolvedSid);
+          // Sid given but no live entry: probe claude first, then codex.
+          // (cwd-only mode hits this branch only when resolvedSid is null,
+          // which is claude-specific; codex live entries always carry sid.)
+          if (resolvedCwd) {
+            const claudeCandidate = jsonlPathFor(resolvedCwd, resolvedSid);
+            if (claudeCandidate && fs.existsSync(claudeCandidate)) {
+              jsonlPath = claudeCandidate;
+              agent = 'claude';
+            }
+          }
+          if (!jsonlPath) {
+            const claudePath = findJsonlPathBySessionId(resolvedSid);
+            if (claudePath) {
+              jsonlPath = claudePath;
+              agent = 'claude';
+            } else {
+              const codexPath = codexSessionScanner.findCodexJsonlBySessionId(resolvedSid);
+              if (codexPath) {
+                jsonlPath = codexPath;
+                agent = 'codex';
+              }
+            }
+          }
         }
 
         // Bail only if we can't anchor on anything at all.
@@ -632,11 +708,13 @@ function attachWS(server) {
           return;
         }
 
+        attachedAgent = agent;
+
         // Capture entry metadata for meta polling.
         let meta;
         if (entry) {
-          console.log('[live] entry-found pid=%s sid=%s cwd=%s tmuxAvail=%s cmuxAvail=%s',
-            entry.pid, entry.sessionId, entry.cwd, !!entry.tmuxAvailable, !!entry.cmuxAvailable);
+          console.log('[live] entry-found pid=%s sid=%s cwd=%s agent=%s tmuxAvail=%s cmuxAvail=%s',
+            entry.pid, entry.sessionId, entry.cwd, entry.agent || 'claude', !!entry.tmuxAvailable, !!entry.cmuxAvailable);
           meta = buildMeta(entry, null);
           lastBroadcastBusy = entry.busy;
           lastBroadcastIdle = entry.idleSeconds;
@@ -656,12 +734,21 @@ function attachWS(server) {
           lastBroadcastTmuxPaneId = tmuxState.paneId;
         } else {
           // jsonl-only fallback (process not found, but file exists for sid).
-          console.log('[live] entry-not-found, using jsonl-only fallback path=%s', jsonlPath);
-          const dirName = jsonlPath ? path.basename(path.dirname(jsonlPath)) : null;
+          console.log('[live] entry-not-found, using jsonl-only fallback agent=%s path=%s', agent, jsonlPath);
+          let cwdGuess = resolvedCwd;
+          if (!cwdGuess && jsonlPath) {
+            if (agent === 'claude') {
+              cwdGuess = decodeEncodedCwd(path.basename(path.dirname(jsonlPath)));
+            } else if (agent === 'codex') {
+              const head = codexSessionScanner._internal.parseCodexHead(jsonlPath);
+              cwdGuess = head ? head.cwd : null;
+            }
+          }
           meta = buildMeta(null, {
             sessionId: resolvedSid,
-            cwd: resolvedCwd || (dirName ? decodeEncodedCwd(dirName) : null),
-            jsonlPath
+            cwd: cwdGuess,
+            jsonlPath,
+            agent
           });
         }
 
@@ -675,12 +762,13 @@ function attachWS(server) {
         // re-emit init when the file appears.
         const fileExists = !!(jsonlPath && fs.existsSync(jsonlPath));
         if (fileExists) attachedJsonlPath = jsonlPath;
-        const allEvents = fileExists ? jsonlNormalizer.getCachedEvents(jsonlPath) : [];
+        const norm = pickNormalizer(attachedAgent);
+        const allEvents = fileExists ? norm.getCachedEvents(jsonlPath) : [];
         const total = allEvents.length;
         const startIdx = Math.max(0, total - INIT_LIMIT);
         const transcript = allEvents.slice(startIdx);
-        console.log('[live] init sent transcript=%d events oldestStartIdx=%d hasEarlier=%s',
-          transcript.length, startIdx, startIdx > 0);
+        console.log('[live] init sent agent=%s transcript=%d events oldestStartIdx=%d hasEarlier=%s',
+          attachedAgent, transcript.length, startIdx, startIdx > 0);
         send({ type: 'init', meta, transcript, oldestStartIdx: startIdx, hasEarlier: startIdx > 0 });
 
         if (fileExists) {
@@ -780,14 +868,21 @@ function attachWS(server) {
           return;
         }
         let resolvedPath = null;
-        if (attachedJsonlPath) resolvedPath = attachedJsonlPath;
-        else if (attachedSid && attachedCwd) resolvedPath = jsonlPathFor(attachedCwd, attachedSid);
-        else if (attachedSid) resolvedPath = findJsonlPathBySessionId(attachedSid);
+        if (attachedJsonlPath) {
+          resolvedPath = attachedJsonlPath;
+        } else if (attachedAgent === 'codex' && attachedSid) {
+          resolvedPath = codexSessionScanner.findCodexJsonlBySessionId(attachedSid);
+        } else if (attachedSid && attachedCwd) {
+          resolvedPath = jsonlPathFor(attachedCwd, attachedSid);
+        } else if (attachedSid) {
+          resolvedPath = findJsonlPathBySessionId(attachedSid);
+        }
         if (!resolvedPath || !fs.existsSync(resolvedPath)) {
           send({ type: 'earlier_events', events: [], oldestStartIdx: 0, hasEarlier: false });
           return;
         }
-        const allEvents = jsonlNormalizer.getCachedEvents(resolvedPath);
+        const norm = pickNormalizer(attachedAgent);
+        const allEvents = norm.getCachedEvents(resolvedPath);
         const newEnd = Math.min(before, allEvents.length);
         const newStart = Math.max(0, newEnd - limit);
         const events = allEvents.slice(newStart, newEnd);

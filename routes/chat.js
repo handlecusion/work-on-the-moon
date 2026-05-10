@@ -9,10 +9,20 @@ const { WebSocketServer } = require('ws');
 const session = require('../auth/session');
 const projects = require('./projects');
 const { runClaude } = require('../lib/claudeRunner');
+const { runCodex } = require('../lib/codexRunner');
 const projectStore = require('../lib/projectStore');
 const swapper = require('../lib/authSwapper');
 const skillCache = require('../lib/skillCache');
 const { UPLOADS_DIRNAME } = require('./uploads');
+
+const VALID_AGENTS = new Set(['claude', 'codex']);
+const DEFAULT_AGENT = 'claude';
+
+function parseAgent(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_AGENT;
+  if (typeof value !== 'string') return null;
+  return VALID_AGENTS.has(value) ? value : null;
+}
 
 const router = express.Router();
 
@@ -53,6 +63,11 @@ router.get('/chat/:name', session.requireAuth, (req, res) => {
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
     return res.status(404).send('Project not found');
   }
+  // Validate ?agent=... if present. Client reads the query param itself; we
+  // just reject obviously bad values so callers get a clear 400.
+  if (req.query.agent !== undefined && parseAgent(req.query.agent) === null) {
+    return res.status(400).send('invalid agent');
+  }
   const chatHtml = path.join(__dirname, '..', 'public', 'chat.html');
   if (fs.existsSync(chatHtml)) {
     return res.sendFile(chatHtml);
@@ -62,22 +77,37 @@ router.get('/chat/:name', session.requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-project runner registry
+// Per-project,per-agent runner registry
 // ---------------------------------------------------------------------------
 //
-// runners: Map<projectName, {
+// runners: Map<runnerKey, {
+//   projectName, agent,
 //   abortController: AbortController | null,
 //   clients: Set<WebSocket>,
 //   busy: boolean
 // }>
+//
+// runnerKey is `${projectName}::${agent}` so claude and codex sessions for
+// the same project are tracked independently (busy state, clients, etc.).
 
 const runners = new Map();
 
-function getOrCreateEntry(projectName) {
-  let entry = runners.get(projectName);
+function runnerKey(projectName, agent) {
+  return projectName + '::' + agent;
+}
+
+function getOrCreateEntry(projectName, agent) {
+  const key = runnerKey(projectName, agent);
+  let entry = runners.get(key);
   if (!entry) {
-    entry = { abortController: null, clients: new Set(), busy: false };
-    runners.set(projectName, entry);
+    entry = {
+      projectName,
+      agent,
+      abortController: null,
+      clients: new Set(),
+      busy: false
+    };
+    runners.set(key, entry);
   }
   return entry;
 }
@@ -199,6 +229,7 @@ function attachWS(server) {
     console.log('[chat] connection open');
 
     let attachedProject = null; // set after successful hello
+    let attachedAgent = null;   // 'claude' | 'codex'
     let isAlive = true;
 
     // ---- Heartbeat ----
@@ -256,16 +287,24 @@ function attachWS(server) {
           return;
         }
 
-        attachedProject = projectName;
-        const entry = getOrCreateEntry(projectName);
-        entry.clients.add(ws);
-        console.log('[chat] hello project=%s clients=%d', projectName, entry.clients.size);
+        const agent = parseAgent(msg.agent);
+        if (agent === null) {
+          closeWithError('invalid agent');
+          return;
+        }
 
-        // Send history
-        const state = projectStore.getProjectState(projectName);
-        const messages = projectStore.getMessageLog(projectName);
+        attachedProject = projectName;
+        attachedAgent = agent;
+        const entry = getOrCreateEntry(projectName, agent);
+        entry.clients.add(ws);
+        console.log('[chat] hello project=%s agent=%s clients=%d', projectName, agent, entry.clients.size);
+
+        // Send history (per-agent slice)
+        const state = projectStore.getProjectState(projectName, agent);
+        const messages = projectStore.getMessageLog(projectName, agent);
         send({
           type: 'history',
+          agent,
           sessionId: state.sessionId,
           messages,
           busy: entry.busy
@@ -291,7 +330,7 @@ function attachWS(server) {
       // ----------------------------------------------------------------
       // Subsequent messages — project already attached
       // ----------------------------------------------------------------
-      const entry = getOrCreateEntry(attachedProject);
+      const entry = getOrCreateEntry(attachedProject, attachedAgent);
 
       // ----------------------------------------------------------------
       // send
@@ -307,6 +346,12 @@ function attachWS(server) {
         const projectAbs = path.join(projects.CODE_DIR, attachedProject);
         const uploadsAbs = path.join(projectAbs, UPLOADS_DIRNAME) + path.sep;
         const rawAttachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+        // Codex `exec` doesn't accept image arrays the way claude does — fail
+        // cleanly rather than silently dropping the user's files.
+        if (attachedAgent === 'codex' && rawAttachments.length > 0) {
+          send({ type: 'error', message: 'attachments not yet supported for codex' });
+          return;
+        }
         if (rawAttachments.length > 5) {
           send({ type: 'error', message: 'too many attachments (max 5)' });
           return;
@@ -356,35 +401,47 @@ function attachWS(server) {
         const userEntry = { ts, kind: 'user_text', text: hasText ? text : '' };
         if (attachments.length > 0) userEntry.attachments = attachments;
 
+        const projectName = attachedProject; // capture for async closures
+        const agent = attachedAgent;
+        const rkey = runnerKey(projectName, agent);
+
         // Persist and broadcast the user message
-        projectStore.appendMessage(attachedProject, userEntry).catch((e) => {
+        projectStore.appendMessage(projectName, agent, userEntry).catch((e) => {
           console.error('[chat] appendMessage error:', e);
         });
-        const broadcastPayload = { type: 'event', kind: 'user_text', text: userEntry.text, ts };
+        const broadcastPayload = { type: 'event', kind: 'user_text', text: userEntry.text, ts, agent };
         if (attachments.length > 0) broadcastPayload.attachments = attachments;
         broadcast(entry, broadcastPayload);
 
         // Start runner
-        const state = projectStore.getProjectState(attachedProject);
+        const state = projectStore.getProjectState(projectName, agent);
         const ac = new AbortController();
         entry.abortController = ac;
         entry.busy = true;
-        broadcast(entry, { type: 'state', busy: true });
-        const projectName = attachedProject; // capture for async closures
-        broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, busy: true });
+        broadcast(entry, { type: 'state', busy: true, agent });
+        broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, agent, busy: true });
         const cwd = path.join(projects.CODE_DIR, projectName);
         let runner;
         try {
-          runner = runClaude({
-            prompt,
-            cwd,
-            sessionId: state.sessionId || null,
-            signal: ac.signal
-          });
+          if (agent === 'codex') {
+            runner = runCodex({
+              prompt,
+              cwd,
+              sessionId: state.sessionId || null,
+              signal: ac.signal
+            });
+          } else {
+            runner = runClaude({
+              prompt,
+              cwd,
+              sessionId: state.sessionId || null,
+              signal: ac.signal
+            });
+          }
         } catch (err) {
           entry.busy = false;
           entry.abortController = null;
-          broadcast(entry, { type: 'state', busy: false });
+          broadcast(entry, { type: 'state', busy: false, agent });
           broadcast(entry, { type: 'error', message: err.message });
           return;
         }
@@ -394,27 +451,28 @@ function attachWS(server) {
 
           // Persist session IDs
           if (evt.kind === 'init' && evt.sessionId) {
-            projectStore.setSessionId(projectName, evt.sessionId).catch((e) => {
+            projectStore.setSessionId(projectName, agent, evt.sessionId).catch((e) => {
               console.error('[chat] setSessionId error:', e);
             });
-            // Cache skills/agents from init payload
-            skillCache.set(evt);
+            // Cache skills/agents from init payload (claude only — codex
+            // emits an init event without skills/agents/plugins).
+            if (agent === 'claude') skillCache.set(evt);
           }
           if (evt.kind === 'result' && evt.sessionId) {
-            projectStore.setSessionId(projectName, evt.sessionId).catch((e) => {
+            projectStore.setSessionId(projectName, agent, evt.sessionId).catch((e) => {
               console.error('[chat] setSessionId error:', e);
             });
           }
 
           // Persist event to message log
-          projectStore.appendMessage(projectName, Object.assign({ ts: evtTs }, evt)).catch((e) => {
+          projectStore.appendMessage(projectName, agent, Object.assign({ ts: evtTs }, evt)).catch((e) => {
             console.error('[chat] appendMessage error:', e);
           });
 
           // Quota detection: inject synthetic quota_exceeded event before result
           if (evt.kind === 'result' && isQuotaError(evt)) {
             // Find last user_text from message log for the retry prompt
-            const msgLog = projectStore.getMessageLog(projectName);
+            const msgLog = projectStore.getMessageLog(projectName, agent);
             let lastPromptText = null;
             for (let i = msgLog.length - 1; i >= 0; i--) {
               if (msgLog[i].kind === 'user_text') {
@@ -427,48 +485,53 @@ function attachWS(server) {
               kind: 'quota_exceeded',
               text: evt.finalText,
               project: projectName,
+              agent,
               lastPromptText
             };
             // Persist the synthetic event
-            projectStore.appendMessage(projectName, quotaEvt).catch((e) => {
+            projectStore.appendMessage(projectName, agent, quotaEvt).catch((e) => {
               console.error('[chat] appendMessage quota_exceeded error:', e);
             });
             // Broadcast to all project clients
-            const currentEntry2 = runners.get(projectName);
+            const currentEntry2 = runners.get(rkey);
             if (currentEntry2) {
               broadcast(currentEntry2, Object.assign({ type: 'event' }, quotaEvt));
             }
           }
 
-          // Broadcast to all clients on this project
-          const currentEntry = runners.get(projectName);
+          // Tag the event with the agent so the client can render correctly
+          // even if multiple agents are connected to the same project.
+          const outEvt = Object.assign({ type: 'event', agent }, evt);
+
+          // Broadcast to all clients on this (project, agent) entry
+          const currentEntry = runners.get(rkey);
           if (currentEntry) {
-            broadcast(currentEntry, Object.assign({ type: 'event' }, evt));
+            broadcast(currentEntry, outEvt);
           }
         });
 
         runner.on('error', (err) => {
-          console.error('[chat] runner error project=%s:', projectName, err);
-          const currentEntry = runners.get(projectName);
+          console.error('[chat] runner error project=%s agent=%s:', projectName, agent, err);
+          const currentEntry = runners.get(rkey);
           if (currentEntry) {
             broadcast(currentEntry, { type: 'error', message: err.message });
           }
         });
 
         runner.on('exit', ({ code, signal: sig, sessionId: exitSessionId, durationMs }) => {
-          const currentEntry = runners.get(projectName);
+          const currentEntry = runners.get(rkey);
           if (currentEntry) {
             currentEntry.busy = false;
             currentEntry.abortController = null;
-            broadcast(currentEntry, { type: 'state', busy: false });
-            broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, busy: false });
+            broadcast(currentEntry, { type: 'state', busy: false, agent });
+            broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, agent, busy: false });
 
             // GC entry if no clients remain
             if (currentEntry.clients.size === 0) {
-              runners.delete(projectName);
+              runners.delete(rkey);
             }
           }
-          projectStore.touchProject(projectName).catch((e) => {
+          projectStore.touchProject(projectName, agent).catch((e) => {
             console.error('[chat] touchProject error:', e);
           });
         });
@@ -496,13 +559,15 @@ function attachWS(server) {
           return;
         }
         const projectName = attachedProject;
-        projectStore.clearSession(projectName).then(() => {
-          const currentEntry = runners.get(projectName);
+        const agent = attachedAgent;
+        const rkey = runnerKey(projectName, agent);
+        projectStore.clearSession(projectName, agent).then(() => {
+          const currentEntry = runners.get(rkey);
           if (currentEntry) {
-            broadcast(currentEntry, { type: 'state', busy: false });
-            broadcast(currentEntry, { type: 'history', sessionId: null, messages: [], busy: false });
+            broadcast(currentEntry, { type: 'state', busy: false, agent });
+            broadcast(currentEntry, { type: 'history', agent, sessionId: null, messages: [], busy: false });
           }
-          broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, busy: false });
+          broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, agent, busy: false });
         }).catch((e) => {
           console.error('[chat] clearSession error:', e);
         });
@@ -598,14 +663,15 @@ function attachWS(server) {
     // ---- Close ----
     ws.on('close', () => {
       clearInterval(pingInterval);
-      console.log('[chat] connection close project=%s', attachedProject || '(no hello)');
+      console.log('[chat] connection close project=%s agent=%s', attachedProject || '(no hello)', attachedAgent || '-');
       if (attachedProject) {
-        const entry = runners.get(attachedProject);
+        const rkey = runnerKey(attachedProject, attachedAgent);
+        const entry = runners.get(rkey);
         if (entry) {
           entry.clients.delete(ws);
           // GC if no clients and not busy
           if (entry.clients.size === 0 && !entry.busy) {
-            runners.delete(attachedProject);
+            runners.delete(rkey);
           }
         }
       }
@@ -615,11 +681,12 @@ function attachWS(server) {
       console.error('[chat] ws error:', err);
       clearInterval(pingInterval);
       if (attachedProject) {
-        const entry = runners.get(attachedProject);
+        const rkey = runnerKey(attachedProject, attachedAgent);
+        const entry = runners.get(rkey);
         if (entry) {
           entry.clients.delete(ws);
           if (entry.clients.size === 0 && !entry.busy) {
-            runners.delete(attachedProject);
+            runners.delete(rkey);
           }
         }
       }
@@ -629,9 +696,20 @@ function attachWS(server) {
   return wss;
 }
 
-function isProjectBusy(projectName) {
-  const entry = runners.get(projectName);
-  return !!(entry && entry.busy);
+/**
+ * Returns true if the (project, agent) pair has a running runner. If `agent`
+ * is omitted, returns true if ANY agent is busy for the project — this keeps
+ * legacy callers (e.g. routes/sessions.js) working unchanged.
+ */
+function isProjectBusy(projectName, agent) {
+  if (agent) {
+    const entry = runners.get(runnerKey(projectName, agent));
+    return !!(entry && entry.busy);
+  }
+  for (const entry of runners.values()) {
+    if (entry.projectName === projectName && entry.busy) return true;
+  }
+  return false;
 }
 
 module.exports = { router, attachWS, runners, isProjectBusy };

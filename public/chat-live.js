@@ -43,7 +43,22 @@ const state = {
     pending: [],    // [{ id, name, mime, size, status, absPath, thumbUrl, error, xhr }]
     nextLocalId: 1,
   },
+
+  // Slash command picker
+  slash: {
+    open: false,
+    query: '',
+    items: [],       // all commands flattened
+    filtered: [],    // current filtered+sorted list (top 30)
+    activeIndex: 0,
+    fetched: false,
+    fetchedAgent: null,
+  },
 };
+
+// Module-level agent — set from init meta. Default 'claude' until init arrives;
+// fetchSlashCommands re-runs on agent change.
+let liveAgent = 'claude';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -68,6 +83,11 @@ const liveAttachStrip    = $('liveAttachStrip');
 const liveAttachBtn      = $('liveAttachBtn');
 const liveFileInput      = $('liveFileInput');
 const liveLoadEarlierBtn = $('liveLoadEarlierBtn');
+const agentMark          = $('agentMark');
+const favicon            = document.getElementById('favicon');
+const slashPicker        = $('slashPicker');
+const slashPickerList    = $('slashPickerList');
+const slashPickerEmpty   = $('slashPickerEmpty');
 
 // ─── Session ID / cwd from URL ────────────────────────────────────────────────
 // Two URL shapes:
@@ -485,7 +505,11 @@ function bodyForWebSearch(input) {
 
 function renderToolUseCard(evt) {
   const name = evt.name || 'unknown';
-  const input = evt.input || {};
+  // Codex normalizer may deliver input as a JSON string; parse defensively.
+  let input = evt.input || {};
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch (_) { input = { _raw: input }; }
+  }
   const toolUseId = evt.toolUseId || null;
   let iconName = 'wrench';
   let labelText = name;
@@ -967,7 +991,22 @@ function applyMeta(meta) {
     label = (meta.sessionId || '').slice(0, 8);
   }
   projectLabel.textContent = label;
-  document.title = label + ' — Working in the Moon (live)';
+
+  // Agent icon + favicon swap
+  const agent = meta.agent || 'claude';
+  liveAgent = agent;
+  const agentIconSrc = agent === 'codex'
+    ? '/static/icons/openai.svg'
+    : '/static/icons/anthropic.svg';
+  if (agentMark) {
+    agentMark.src = agentIconSrc;
+    agentMark.hidden = false;
+  }
+  if (favicon) {
+    favicon.href = agentIconSrc;
+  }
+
+  document.title = label + ' — Working in the Moon (live ' + agent + ')';
 
   // Source chip: show "cmux", "tmux", or "terminal" based on availability.
   // We derive it from meta fields rather than meta.source so it stays in sync
@@ -1416,9 +1455,45 @@ if (liveTextarea) {
   liveTextarea.addEventListener('input', () => {
     autoResizeLiveTextarea();
     updateSendBtnEnabled();
+    updateSlashPicker();
+  });
+
+  liveTextarea.addEventListener('focus', () => {
+    fetchSlashCommands();
   });
 
   liveTextarea.addEventListener('keydown', (e) => {
+    // Slash picker navigation takes precedence over send-on-Enter.
+    if (state.slash.open) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        state.slash.activeIndex = Math.min(
+          state.slash.activeIndex + 1,
+          state.slash.filtered.length - 1
+        );
+        renderSlashList();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        state.slash.activeIndex = Math.max(state.slash.activeIndex - 1, 0);
+        renderSlashList();
+        return;
+      }
+      if (e.key === 'Enter' && !liveIsComposing && !e.isComposing) {
+        if (state.slash.filtered.length > 0) {
+          e.preventDefault();
+          insertSlashCommand(state.slash.activeIndex);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSlashPicker();
+        return;
+      }
+    }
+
     // Cmd/Ctrl+Enter always sends (overrides IME / touch).
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -1433,6 +1508,183 @@ if (liveTextarea) {
     }
   });
 }
+
+// ─── Slash command picker ────────────────────────────────────────────────────
+
+function fetchSlashCommands() {
+  if (state.slash.fetched && state.slash.fetchedAgent === liveAgent) return;
+  state.slash.fetched = true;
+  state.slash.fetchedAgent = liveAgent;
+
+  fetch('/api/slash-commands?agent=' + encodeURIComponent(liveAgent), { credentials: 'same-origin' })
+    .then((r) => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then((data) => {
+      const kindOrder = { 'built-in': 0, builtin: 0, plugin: 1, skill: 2, custom: 3, agent: 4 };
+      const all = Array.isArray(data) ? data : [
+        ...(data.built_in || []),
+        ...(data.plugins  || []),
+        ...(data.skills   || []),
+        ...(data.custom   || []),
+        ...(data.agents   || []),
+      ];
+      const seen = new Set();
+      state.slash.items = all.filter((item) => {
+        if (seen.has(item.name)) return false;
+        seen.add(item.name);
+        return true;
+      }).sort((a, b) => {
+        const ko = (kindOrder[a.kind] ?? 99) - (kindOrder[b.kind] ?? 99);
+        if (ko !== 0) return ko;
+        return a.name.localeCompare(b.name);
+      });
+      if (state.slash.open) updateSlashPicker();
+    })
+    .catch(() => {
+      state.slash.fetched = false;
+      state.slash.fetchedAgent = null;
+    });
+}
+
+function fuzzyScore(name, query) {
+  if (!query) return 1;
+  const haystack = name.toLowerCase();
+  const needle = query.toLowerCase().replace(/^\//, '');
+  let hi = 0;
+  let lastIdx = -1;
+  let gaps = 0;
+  for (let ni = 0; ni < needle.length; ni++) {
+    const ch = needle[ni];
+    const found = haystack.indexOf(ch, hi);
+    if (found === -1) return -1;
+    if (lastIdx !== -1) gaps += found - lastIdx - 1;
+    lastIdx = found;
+    hi = found + 1;
+  }
+  const density = needle.length / haystack.length;
+  const startBonus = haystack.startsWith(needle) ? 2 : (haystack.indexOf(needle) !== -1 ? 1 : 0);
+  return density * 10 - gaps * 0.1 + startBonus;
+}
+
+function highlightSlashMatch(name, query) {
+  if (!query) return escapeHtml(name);
+  const needle = query.toLowerCase().replace(/^\//, '');
+  if (!needle) return escapeHtml(name);
+  const lower = name.toLowerCase();
+  const result = [];
+  let hi = 0;
+  let ni = 0;
+  while (ni < needle.length && hi < name.length) {
+    const ch = needle[ni];
+    const found = lower.indexOf(ch, hi);
+    if (found === -1) break;
+    if (found > hi) result.push(escapeHtml(name.slice(hi, found)));
+    result.push('<mark>' + escapeHtml(name[found]) + '</mark>');
+    hi = found + 1;
+    ni++;
+  }
+  if (hi < name.length) result.push(escapeHtml(name.slice(hi)));
+  return result.join('');
+}
+
+function filterSlash(query) {
+  const items = state.slash.items;
+  if (!items.length) {
+    state.slash.filtered = [];
+    return;
+  }
+  const scored = [];
+  for (const item of items) {
+    const score = fuzzyScore(item.name, query);
+    if (score >= 0) scored.push({ item, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  state.slash.filtered = scored.slice(0, 30).map((s) => s.item);
+}
+
+function renderSlashList() {
+  if (!slashPickerList || !slashPickerEmpty) return;
+  const filtered = state.slash.filtered;
+  if (filtered.length === 0) {
+    slashPickerList.innerHTML = '';
+    slashPickerEmpty.hidden = false;
+    return;
+  }
+  slashPickerEmpty.hidden = true;
+  const activeIdx = state.slash.activeIndex;
+  let html = '';
+  for (let i = 0; i < filtered.length; i++) {
+    const item = filtered[i];
+    const activeClass = i === activeIdx ? ' active' : '';
+    const kindClass = (item.kind || '').replace(/[^a-z-]/g, '');
+    html +=
+      '<div class="slash-picker-item' + activeClass + '" data-index="' + i + '" role="option" aria-selected="' + (i === activeIdx ? 'true' : 'false') + '">' +
+        '<span class="name">' + highlightSlashMatch(item.name, state.slash.query) + '</span>' +
+        '<span class="desc">' + escapeHtml(item.description || '') + '</span>' +
+        '<span class="kind ' + escapeHtml(kindClass) + '">' + escapeHtml(item.kind || '') + '</span>' +
+      '</div>';
+  }
+  slashPickerList.innerHTML = html;
+  for (const row of slashPickerList.querySelectorAll('.slash-picker-item')) {
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const idx = parseInt(row.dataset.index, 10);
+      if (!isNaN(idx)) insertSlashCommand(idx);
+    });
+  }
+  const activeEl = slashPickerList.querySelector('.slash-picker-item.active');
+  if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+}
+
+function openSlashPicker() {
+  if (!slashPicker) return;
+  slashPicker.hidden = false;
+  state.slash.open = true;
+  fetchSlashCommands();
+}
+
+function closeSlashPicker() {
+  if (!slashPicker) return;
+  slashPicker.hidden = true;
+  state.slash.open = false;
+  state.slash.query = '';
+  state.slash.filtered = [];
+  state.slash.activeIndex = 0;
+}
+
+function updateSlashPicker() {
+  if (!liveTextarea) return;
+  const val = liveTextarea.value;
+  if (/^\/[^\s]*$/.test(val)) {
+    state.slash.query = val;
+    filterSlash(val);
+    state.slash.activeIndex = 0;
+    openSlashPicker();
+    renderSlashList();
+  } else {
+    closeSlashPicker();
+  }
+}
+
+function insertSlashCommand(index) {
+  const item = state.slash.filtered[index];
+  if (!item || !liveTextarea) return;
+  liveTextarea.value = item.name + ' ';
+  closeSlashPicker();
+  liveTextarea.dispatchEvent(new Event('input'));
+  liveTextarea.focus();
+  const len = liveTextarea.value.length;
+  liveTextarea.setSelectionRange(len, len);
+}
+
+document.addEventListener('click', (e) => {
+  if (!state.slash.open) return;
+  if (slashPicker && !slashPicker.contains(e.target) && e.target !== liveTextarea) {
+    closeSlashPicker();
+  }
+});
 
 if (liveSendBtn) {
   liveSendBtn.addEventListener('click', () => { sendLiveText(); });
@@ -1666,6 +1918,12 @@ function showDisconnectBanner() {
 if (refreshBtn) {
   refreshBtn.addEventListener('click', () => { location.reload(); });
 }
+
+// iOS Safari BFCache: force reload on back-nav so the live tail re-attaches
+// and any new agent/icon code is picked up.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) location.reload();
+});
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
 {

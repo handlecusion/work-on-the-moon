@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
 <meta name="theme-color" content="#101010" />
 <title>Working in the Moon — Live</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e8e8e8'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'/%3E%3C/svg%3E" />
+<link rel="icon" id="favicon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e8e8e8'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'/%3E%3C/svg%3E" />
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-title" content="Moon" />
@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=20260510c" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
 <style>
   /* ── chat-live page-local styles ───────────────────────────────────── */
@@ -130,6 +130,13 @@
   .chat-input-hint.live-cmux-hint.unavailable {
     color: var(--danger);
   }
+  .agent-mark {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
 </style>
 </head>
 <body class="chat-page live-page">
@@ -142,6 +149,7 @@
         <i data-lucide="chevron-left"></i>
       </a>
       <span class="chat-project-name" id="projectNameLabel">—</span>
+      <img id="agentMark" class="agent-mark" src="" alt="" aria-hidden="true" hidden />
       <span class="live-badge" id="liveBadge">LIVE</span>
       <span class="live-source-pill" id="liveSourcePill" hidden>—</span>
       <span class="conn-dot" id="connDot" data-state="connecting" aria-hidden="true"></span>
@@ -204,6 +212,12 @@
   <button id="refreshBtn">새로고침</button>
 </div>
 
+<!-- ── Slash command picker ───────────────────────────────────── -->
+<div class="slash-picker" id="slashPicker" role="listbox" aria-label="슬래시 커맨드" hidden>
+  <div class="slash-picker-list" id="slashPickerList"></div>
+  <div class="slash-picker-empty" id="slashPickerEmpty" hidden>일치하는 명령이 없습니다.</div>
+</div>
+
 <!-- ── Input bar (cmux-routed) ────────────────────────────────── -->
 <footer class="chat-input-bar">
   <!-- Pending attachments (chips, above the textarea) -->
@@ -239,6 +253,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260508d"></script>
+<script src="/static/chat-live.js?v=20260510d"></script>
 </body>
 </html>

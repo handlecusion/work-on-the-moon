@@ -39,42 +39,54 @@ router.get('/api/sessions', session.requireAuth, async (req, res) => {
   const chat = getChatModule();
   const names = listProjectNames();
 
-  const items = names.map((name) => {
-    const state = projectStore.getProjectState(name);
-    const busy = chat.isProjectBusy(name);
+  const items = [];
+  for (const name of names) {
+    for (const agent of ['claude', 'codex']) {
+      const state = projectStore.getProjectState(name, agent);
+      const busy = chat.isProjectBusy(name, agent);
 
-    let lastUserText = null;
-    let lastAssistantText = null;
-    for (let i = state.messageLog.length - 1; i >= 0; i--) {
-      const e = state.messageLog[i];
-      if (!lastUserText && e.kind === 'user_text') {
-        lastUserText = (e.text || '').slice(0, 80);
+      // Skip empty codex slots — only emit the claude row for projects with no
+      // activity so every project still shows a claude entry in "all projects".
+      if (agent === 'codex' && state.messageLog.length === 0 && !state.sessionId && !busy) {
+        continue;
       }
-      if (!lastAssistantText && e.kind === 'assistant_text') {
-        lastAssistantText = (e.text || '').slice(0, 80);
+
+      let lastUserText = null;
+      let lastAssistantText = null;
+      for (let i = state.messageLog.length - 1; i >= 0; i--) {
+        const e = state.messageLog[i];
+        if (!lastUserText && e.kind === 'user_text') {
+          lastUserText = (e.text || '').slice(0, 80);
+        }
+        if (!lastAssistantText && e.kind === 'assistant_text') {
+          lastAssistantText = (e.text || '').slice(0, 80);
+        }
+        if (lastUserText && lastAssistantText) break;
       }
-      if (lastUserText && lastAssistantText) break;
+
+      items.push({
+        name,
+        agent,
+        sessionId: state.sessionId || null,
+        lastUsedAt: state.lastUsedAt || null,
+        sessionStartedAt: state.sessionStartedAt || null,
+        busy,
+        lastUserText,
+        lastAssistantText,
+        hasMessages: state.messageLog.length > 0,
+        messageCount: state.messageLog.length
+      });
     }
+  }
 
-    return {
-      name,
-      sessionId: state.sessionId || null,
-      lastUsedAt: state.lastUsedAt || null,
-      sessionStartedAt: state.sessionStartedAt || null,
-      busy,
-      lastUserText,
-      lastAssistantText,
-      hasMessages: state.messageLog.length > 0,
-      messageCount: state.messageLog.length
-    };
-  });
-
-  // Sort: primary by lastUsedAt desc (null = -Infinity), secondary by name asc
+  // Sort: lastUsedAt desc (null = -Infinity), then name asc, then agent asc
   items.sort((a, b) => {
     const ta = a.lastUsedAt ? Date.parse(a.lastUsedAt) : -Infinity;
     const tb = b.lastUsedAt ? Date.parse(b.lastUsedAt) : -Infinity;
     if (tb !== ta) return tb - ta;
-    return a.name.localeCompare(b.name);
+    const nc = a.name.localeCompare(b.name);
+    if (nc !== 0) return nc;
+    return a.agent.localeCompare(b.agent);
   });
 
   // Determine whether the caller wants the extended response shape. Default
