@@ -1929,8 +1929,11 @@ window.addEventListener('pageshow', (e) => {
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
 {
-  const validSid = state.sessionId
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(state.sessionId);
+  // Accept claude/codex UUIDs or hermes timestamped ids (YYYYMMDD_HHMMSS_<hex>).
+  const validSid = state.sessionId && (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(state.sessionId)
+    || /^[0-9]{8}_[0-9]{6}_[0-9a-f]{6,8}$/.test(state.sessionId)
+  );
   const validCwd = state.cwd && state.cwd.charAt(0) === '/';
   if (!validSid && !validCwd) {
     showToast('잘못된 세션 ID 또는 경로입니다.', 'error');
