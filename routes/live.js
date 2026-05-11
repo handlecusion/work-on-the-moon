@@ -37,6 +37,8 @@ const codexJsonlNormalizer = require('../lib/codexJsonlNormalizer');
 const codexSessionScanner = require('../lib/codexSessionScanner');
 const hermesJsonlNormalizer = require('../lib/hermesJsonlNormalizer');
 const hermesSessionScanner = require('../lib/hermesSessionScanner');
+const hermesDb = require('../lib/hermesDb');
+const hermesDbTailer = require('../lib/hermesDbTailer');
 
 function pickNormalizer(agent) {
   if (agent === 'codex')  return codexJsonlNormalizer;
@@ -159,6 +161,17 @@ async function resolveAgentForSessionId(sessionId) {
   const hermesPath = hermesSessionScanner.findHermesJsonlBySessionId(sessionId);
   if (hermesPath) {
     return { agent: 'hermes', jsonlPath: hermesPath, entry: null };
+  }
+
+  // Hermes DB-backed: the session lives in ~/.hermes/state.db with no
+  // on-disk jsonl. Confirm by querying for at least one row.
+  if (/^[0-9]{8}_[0-9]{6}_[0-9a-f]{6,8}$/.test(sessionId)) {
+    try {
+      const ts = await hermesDb.getLatestTimestamp(sessionId);
+      if (ts != null) {
+        return { agent: 'hermes', jsonlPath: null, entry: null, backend: 'state_db' };
+      }
+    } catch (_) { /* fall through */ }
   }
 
   return null;
@@ -335,7 +348,9 @@ function attachWS(server) {
     let attachedSid = null;
     let attachedCwd = null;
     let attachedJsonlPath = null;
-    let attachedAgent = 'claude';   // 'claude' or 'codex' — fixed once known
+    let attachedAgent = 'claude';   // 'claude', 'codex', or 'hermes' — fixed once known
+    let attachedDbSessionId = null; // set for hermes state.db-backed sessions
+    let dbEventsCache = null;       // in-memory transcript for DB-backed sessions
     let tailerHandle = null;
     let metaRefreshTimer = null;
     let metaDebounceTimer = null;
@@ -779,6 +794,54 @@ function attachWS(server) {
         attachedCwd = resolvedCwd;
         lastMeta = meta;
 
+        // ── Hermes DB-backed branch ──────────────────────────────────────
+        // Hermes stores its transcript in ~/.hermes/state.db, not a jsonl.
+        // Detect this and use the DB tailer instead of the file tailer.
+        const isHermesDb = attachedAgent === 'hermes' && !jsonlPath && resolvedSid && (
+          (entry && entry.backend === 'state_db') ||
+          (await hermesDb.getLatestTimestamp(resolvedSid).catch(() => null)) != null
+        );
+        if (isHermesDb) {
+          let allEvents;
+          try { allEvents = await hermesDbTailer.loadTranscript(resolvedSid); }
+          catch (e) {
+            closeWithError('hermes db read failed: ' + e.message);
+            return;
+          }
+          dbEventsCache = allEvents;
+          attachedDbSessionId = resolvedSid;
+          const totalDb = allEvents.length;
+          const startIdxDb = Math.max(0, totalDb - INIT_LIMIT);
+          const transcriptDb = allEvents.slice(startIdxDb);
+          console.log('[live] init sent agent=hermes(db) transcript=%d events oldestStartIdx=%d hasEarlier=%s',
+            transcriptDb.length, startIdxDb, startIdxDb > 0);
+          send({
+            type: 'init',
+            meta,
+            transcript: transcriptDb,
+            oldestStartIdx: startIdxDb,
+            hasEarlier: startIdxDb > 0
+          });
+          try {
+            tailerHandle = await hermesDbTailer.attach(resolvedSid, {
+              // attach replays onInit synchronously — ignore the duplicate,
+              // we already sent init above.
+              onInit: () => {},
+              onEvent: (ev) => {
+                if (dbEventsCache) dbEventsCache.push(ev);
+                send(Object.assign({ type: 'event' }, ev));
+              },
+              onMtimeChange: () => { /* periodic meta refresh handles activity */ },
+              onClose: () => { /* DB sessions never "close" — leave WS alone */ }
+            });
+          } catch (e) {
+            closeWithError('hermes db tailer attach failed: ' + e.message);
+            return;
+          }
+          startMetaRefresh();
+          return;
+        }
+
         // Send init synchronously. If the file exists, replay the most recent
         // INIT_LIMIT events; otherwise send empty and let the lazy attach path
         // re-emit init when the file appears.
@@ -894,6 +957,15 @@ function attachWS(server) {
         const limit = Math.min(Number(msg.limit) || INIT_LIMIT, 500);
         if (!Number.isFinite(before) || before <= 0) {
           send({ type: 'earlier_events', events: [], oldestStartIdx: 0, hasEarlier: false });
+          return;
+        }
+        // Hermes DB-backed: slice from the in-memory cache; the DB tailer
+        // keeps it up to date with new events.
+        if (attachedDbSessionId && dbEventsCache) {
+          const newEnd = Math.min(before, dbEventsCache.length);
+          const newStart = Math.max(0, newEnd - limit);
+          const events = dbEventsCache.slice(newStart, newEnd);
+          send({ type: 'earlier_events', events, oldestStartIdx: newStart, hasEarlier: newStart > 0 });
           return;
         }
         let resolvedPath = null;
