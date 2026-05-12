@@ -564,6 +564,110 @@ function bodyForWebSearch(input) {
   return '<div class="tool-body-websearch"><span class="tool-search-query">' + escapeHtml(query) + '</span>' + waitingBodyHtml() + '</div>';
 }
 
+// ─── AskUserQuestion picker ───────────────────────────────────────────────────
+// Renders claude's AskUserQuestion tool_use as an inline button picker so the
+// user can answer with a tap from the chat view. Clicking a single-select
+// option sends "<1-based index>\n" via the existing tmux/cmux forwarding path,
+// which the claude TUI picker accepts as "select option N + submit".
+
+function buildAskPicker(questions, toolUseId) {
+  const root = el('div', 'ask-picker');
+  const list = Array.isArray(questions) ? questions : [];
+  list.forEach((q, qIdx) => {
+    const qBlock = el('div', 'ask-question');
+    qBlock.dataset.qText = q && q.question ? String(q.question) : '';
+    if (q && q.header) {
+      const hdr = el('span', 'ask-header', escapeHtml(String(q.header)));
+      qBlock.appendChild(hdr);
+    }
+    const qTxt = el('div', 'ask-text', escapeHtml(String((q && q.question) || '')));
+    qBlock.appendChild(qTxt);
+
+    const isMulti = !!(q && q.multiSelect);
+    const opts = Array.isArray(q && q.options) ? q.options : [];
+    const listEl = el('div', 'ask-options' + (isMulti ? ' is-multi' : ''));
+
+    opts.forEach((o, optIdx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ask-option';
+      btn.dataset.qIdx = String(qIdx);
+      btn.dataset.optIdx = String(optIdx);
+      btn.dataset.label = String((o && o.label) || '');
+      btn.innerHTML =
+        '<span class="ask-option-num">' + (optIdx + 1) + '</span>' +
+        '<span class="ask-option-label">' + escapeHtml(String((o && o.label) || '')) + '</span>' +
+        (o && o.description ? '<span class="ask-option-desc">' + escapeHtml(String(o.description)) + '</span>' : '');
+      if (isMulti) {
+        btn.disabled = true;
+        btn.title = '다중 선택은 터미널에서 직접 응답하세요';
+      } else {
+        btn.addEventListener('click', () => onAskOptionPick(toolUseId, qIdx, optIdx));
+      }
+      listEl.appendChild(btn);
+    });
+    qBlock.appendChild(listEl);
+    if (isMulti) {
+      const note = el('div', 'ask-multi-note', '다중 선택 질문은 터미널에서 직접 응답하세요.');
+      qBlock.appendChild(note);
+    }
+    root.appendChild(qBlock);
+  });
+  return root;
+}
+
+function onAskOptionPick(toolUseId, qIdx, optIdx) {
+  if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    showToast('외부 세션 연결이 없어 답변 전송 불가', 'error');
+    return;
+  }
+  // claude TUI picker accepts <N><Enter>. tmuxClient peels trailing \n into a
+  // separate Enter key, so the pasted "<N>" arrives first, then the Enter.
+  const text = String(optIdx + 1) + '\n';
+  try {
+    state.ws.send(JSON.stringify({ type: 'send', text }));
+  } catch (_) { return; }
+
+  if (toolUseId && toolUseElements.has(toolUseId)) {
+    const { card } = toolUseElements.get(toolUseId);
+    const btn = card.querySelector(
+      '.ask-option[data-q-idx="' + qIdx + '"][data-opt-idx="' + optIdx + '"]'
+    );
+    if (btn) {
+      btn.classList.add('sent');
+      const qBlock = btn.closest('.ask-question');
+      if (qBlock) qBlock.querySelectorAll('.ask-option').forEach((b) => { b.disabled = true; });
+    }
+  }
+  if (state.terminal.open) setTimeout(refreshTerminalPreview, 250);
+}
+
+function parseAskAnswers(content) {
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content.map((c) => (c && typeof c.text === 'string') ? c.text : '').join('');
+  }
+  const out = {};
+  const re = /"([^"]+)"="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(text))) out[m[1]] = m[2];
+  return out;
+}
+
+function lockAskPicker(card, answers) {
+  if (!card) return;
+  card.querySelectorAll('.ask-question').forEach((qBlock) => {
+    const qText = qBlock.dataset.qText || '';
+    const chosen = answers[qText];
+    qBlock.querySelectorAll('.ask-option').forEach((b) => {
+      b.disabled = true;
+      if (chosen && b.dataset.label === chosen) b.classList.add('chosen');
+    });
+  });
+}
+
 function renderToolUseCard(evt) {
   const name = evt.name || 'unknown';
   // Codex normalizer may deliver input as a JSON string; parse defensively.
@@ -644,6 +748,14 @@ function renderToolUseCard(evt) {
       iconName = 'globe'; labelText = 'WebSearch';
       pillText = (input.query || '').slice(0, 40);
       bodyNodeOrHtml = bodyForWebSearch(input); bodyClass = 'tool-body-websearch';
+      break;
+    }
+    case 'AskUserQuestion': {
+      iconName = 'help-circle'; labelText = '질문';
+      const qs = Array.isArray(input.questions) ? input.questions : [];
+      pillText = qs.length > 1 ? qs.length + '개' : null;
+      bodyNodeOrHtml = buildAskPicker(qs, toolUseId);
+      bodyClass = 'tool-body-ask';
       break;
     }
     default: {
@@ -838,6 +950,11 @@ function updateToolResultBody(evt) {
           '<pre class="tool-fetch-pre">' + escapeHtml(excerpt) + (resultText.length > 400 ? '…' : '') + '</pre>' +
         '</div>';
       bodyEl.innerHTML = newBodyHtml;
+      break;
+    }
+    case 'AskUserQuestion': {
+      // Keep the picker visible; just lock it and mark the chosen option.
+      lockAskPicker(card, parseAskAnswers(content));
       break;
     }
     case 'WebSearch': {

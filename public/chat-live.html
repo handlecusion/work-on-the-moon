@@ -207,6 +207,94 @@
   .live-terminal-toolbar button.active { color: var(--accent); border-color: var(--accent); }
   .live-terminal-toolbar button i, .live-terminal-toolbar button svg { width: 12px; height: 12px; }
   .live-terminal-toolbar .live-terminal-status { margin-left: auto; }
+
+  /* AskUserQuestion picker (inline buttons inside tool card body). */
+  .tool-body-ask { padding: 0; }
+  .ask-picker { display: flex; flex-direction: column; gap: 14px; padding: 10px 12px; }
+  .ask-question { display: flex; flex-direction: column; gap: 6px; }
+  .ask-header {
+    display: inline-block;
+    width: max-content;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .ask-text { font-size: 13px; color: var(--fg); line-height: 1.4; font-weight: 500; }
+  .ask-options { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .ask-option {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    text-align: left;
+    background: var(--bg-elev, rgba(255,255,255,0.02));
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.35;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .ask-option:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .ask-option:active:not(:disabled) { transform: scale(0.99); }
+  .ask-option:disabled { cursor: default; opacity: 0.75; }
+  .ask-option-num {
+    grid-row: 1 / span 2;
+    align-self: start;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .ask-option-label { font-weight: 500; color: var(--fg); align-self: center; }
+  .ask-option-desc {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 11px;
+    color: var(--fg-dim);
+    line-height: 1.4;
+  }
+  .ask-option.sent {
+    border-color: var(--accent);
+    background: rgba(99, 179, 237, 0.10);
+  }
+  .ask-option.sent .ask-option-num {
+    background: var(--accent);
+    color: var(--bg, #0b0d10);
+  }
+  .ask-option.chosen {
+    border-color: var(--success);
+    background: rgba(72, 187, 120, 0.10);
+  }
+  .ask-option.chosen .ask-option-num {
+    background: var(--success);
+    color: var(--bg, #0b0d10);
+  }
+  .ask-multi-note {
+    font-size: 11px;
+    color: var(--fg-dim);
+    font-style: italic;
+    margin-top: 2px;
+  }
 </style>
 </head>
 <body class="chat-page live-page">
@@ -335,6 +423,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260512b"></script>
+<script src="/static/chat-live.js?v=20260512c"></script>
 </body>
 </html>
