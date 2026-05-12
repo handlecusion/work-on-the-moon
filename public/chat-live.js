@@ -310,6 +310,12 @@ function removeEmptyState() {
 // container instead of the live messages list. Used by chunked head loading.
 let appendTargetOverride = null;
 
+// True while replaying the transcript tail chunks at session open. Used to
+// distinguish "historical event being re-rendered" from "live event just
+// arrived via WS", so AskUserQuestion doesn't try to grab attention for
+// old pickers that were already answered.
+let isHistoricalReplay = false;
+
 function appendNode(node) {
   if (appendTargetOverride) {
     appendTargetOverride.appendChild(node);
@@ -793,12 +799,13 @@ function renderToolUseCard(evt) {
   row.appendChild(card);
   appendNode(row);
 
-  // For live-tailed AskUserQuestion (not initial transcript replay), scroll
-  // the picker into view AND unpin from bottom. Without unpinning, every
-  // subsequent event's appendNode() calls scrollToBottom() which yanks the
-  // viewport away from the picker before the user has a chance to read it.
-  if (isAsk && appendTargetOverride === null) {
-    console.log('[wotm] AskUserQuestion picker arrived — centering view', { toolUseId });
+  // For live-tailed AskUserQuestion (not historical transcript replay, not
+  // load-earlier paginated fragment), scroll the picker into view AND unpin
+  // from bottom. Without unpinning, every subsequent event's appendNode()
+  // calls scrollToBottom() which yanks the viewport away from the picker
+  // before the user has a chance to read it.
+  if (isAsk && appendTargetOverride === null && !isHistoricalReplay) {
+    console.log('[wotm] AskUserQuestion picker arrived (live) — centering view', { toolUseId });
     state.pinned = false;
     if (typeof scrollBtn !== 'undefined' && scrollBtn) scrollBtn.classList.add('visible');
     requestAnimationFrame(() => {
@@ -1097,13 +1104,18 @@ function renderTranscript(events) {
 
   let i = 0;
   function nextTailChunk() {
-    if (myToken !== _renderToken) return; // superseded by another renderTranscript
+    if (myToken !== _renderToken) {
+      isHistoricalReplay = false;
+      return; // superseded by another renderTranscript
+    }
     if (i >= tail.length) {
       streamHint.remove();
       if (head.length > 0) insertLoadEarlierButton(head, myToken);
       scrollToBottom(true);
+      isHistoricalReplay = false;
       return;
     }
+    isHistoricalReplay = true;
     const slice = tail.slice(i, i + CHUNK_SIZE);
     for (const ev of slice) renderEvent(ev);
     i += CHUNK_SIZE;
