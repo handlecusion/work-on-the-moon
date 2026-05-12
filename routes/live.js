@@ -952,6 +952,38 @@ function attachWS(server) {
         return;
       }
 
+      if (type === 'capture_pane') {
+        // Snapshot the visible TUI so the UI can show HITL prompts (plan
+        // menus, permission asks) that never make it into the jsonl.
+        // Routing priority matches send: cmux > tmux. Reply once with
+        // {pane_snapshot, text|null, source|null, error?}.
+        if (cmuxState.available && cmuxState.surfaceId) {
+          const ok = await ensureCmuxConnected();
+          if (!ok) {
+            send({ type: 'pane_snapshot', text: null, source: null, error: 'cmux 연결이 끊어졌습니다.' });
+            return;
+          }
+          try {
+            const text = await cmuxClient.readText(cmuxState.surfaceId);
+            send({ type: 'pane_snapshot', text: text || '', source: 'cmux' });
+          } catch (err) {
+            send({ type: 'pane_snapshot', text: null, source: null, error: err && err.message ? err.message : String(err) });
+          }
+          return;
+        }
+        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
+          try {
+            const text = await tmuxClient.capturePane(tmuxState.socketPath, tmuxState.paneId, { lines: 80 });
+            send({ type: 'pane_snapshot', text: text || '', source: 'tmux' });
+          } catch (err) {
+            send({ type: 'pane_snapshot', text: null, source: null, error: err && err.message ? err.message : String(err) });
+          }
+          return;
+        }
+        send({ type: 'pane_snapshot', text: null, source: null, error: '연결된 외부 세션이 없습니다.' });
+        return;
+      }
+
       if (type === 'load_earlier') {
         const before = Number(msg.before);
         const limit = Math.min(Number(msg.limit) || INIT_LIMIT, 500);

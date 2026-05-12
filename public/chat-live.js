@@ -54,6 +54,21 @@ const state = {
     fetched: false,
     fetchedAgent: null,
   },
+
+  // Optimistic-echo bookkeeping for tmux/cmux sends.
+  // Each entry: { text, sentAt, node, confirmed }
+  // We dedupe arriving user_text events against the head of this queue so
+  // that a real jsonl echo replaces (not duplicates) the optimistic bubble.
+  pendingSends: [],
+
+  // Terminal preview (HITL surfacing) state.
+  terminal: {
+    open: false,
+    pollTimer: null,
+    inflight: false,
+    lastUpdated: null,
+    lastSource: null,
+  },
 };
 
 // Module-level agent — set from init meta. Default 'claude' until init arrives;
@@ -88,6 +103,10 @@ const favicon            = document.getElementById('favicon');
 const slashPicker        = $('slashPicker');
 const slashPickerList    = $('slashPickerList');
 const slashPickerEmpty   = $('slashPickerEmpty');
+const liveTerminalPanel   = $('liveTerminalPanel');
+const liveTerminalToggle  = $('liveTerminalToggle');
+const liveTerminalRefresh = $('liveTerminalRefresh');
+const liveTerminalStatus  = $('liveTerminalStatus');
 
 // ─── Session ID / cwd from URL ────────────────────────────────────────────────
 // Two URL shapes:
@@ -310,10 +329,52 @@ function el(tag, cls, html) {
 }
 
 function renderUserBubble(text) {
+  // If a recent optimistic send matches this incoming user_text, mark the
+  // optimistic bubble as confirmed instead of rendering a duplicate.
+  const matched = consumePendingSend(text);
+  if (matched && matched.node && matched.node.isConnected) {
+    matched.node.classList.add('confirmed');
+    return;
+  }
   const row = el('div', 'msg-row user');
   const bubble = el('div', 'msg-bubble', escapeHtml(text));
   row.appendChild(bubble);
   appendNode(row);
+}
+
+// Render the bubble client-side immediately when the user hits send. The real
+// jsonl echo (if any — TUI menu picks like "1" never make it to jsonl) will
+// confirm via consumePendingSend(). Returns the bubble node so the caller can
+// stash it on the pending-send entry.
+function renderOptimisticUserBubble(text) {
+  const row = el('div', 'msg-row user');
+  const bubble = el('div', 'msg-bubble optimistic', escapeHtml(text));
+  row.appendChild(bubble);
+  appendNode(row);
+  return bubble;
+}
+
+const PENDING_SEND_TTL_MS = 60 * 1000;
+
+function normalizeForDedupe(s) {
+  // Strip a single trailing newline (sendLiveText appends '\n' for submit) and
+  // collapse CRLF before comparison.
+  return String(s == null ? '' : s).replace(/\r\n/g, '\n').replace(/\n+$/, '');
+}
+
+function consumePendingSend(incomingText) {
+  const target = normalizeForDedupe(incomingText);
+  const now = Date.now();
+  // Drop expired entries first.
+  state.pendingSends = state.pendingSends.filter((p) => (now - p.sentAt) < PENDING_SEND_TTL_MS);
+  for (let i = 0; i < state.pendingSends.length; i++) {
+    const p = state.pendingSends[i];
+    if (normalizeForDedupe(p.text) === target) {
+      state.pendingSends.splice(i, 1);
+      return p;
+    }
+  }
+  return null;
 }
 
 function renderAssistantBubble(text) {
@@ -1436,6 +1497,27 @@ function sendLiveText() {
   }
   // Trailing \n submits in claude TUI (cmux/tmux normalize \n → \r for the pty).
   state.ws.send(JSON.stringify({ type: 'send', text: text + '\n' }));
+
+  // Optimistic echo: render the sent text immediately so the user sees it
+  // landed. For prompt-mode sends the jsonl will eventually emit a matching
+  // user_text and consumePendingSend() will mark this bubble as confirmed.
+  // For TUI menu picks ("1", "y", etc.) no jsonl entry ever appears — the
+  // bubble stays in the "전달 확인 대기" state and surfaces only that we sent
+  // it, which is still better than the previous silent void.
+  const optimisticNode = renderOptimisticUserBubble(text);
+  state.pendingSends.push({
+    text,
+    sentAt: Date.now(),
+    node: optimisticNode,
+    confirmed: false
+  });
+  // Refresh the terminal preview right after a send so the user can immediately
+  // see how the TUI reacted (HITL prompt, menu update, etc.) if they have it
+  // open or if it gets opened.
+  if (state.terminal.open) {
+    setTimeout(refreshTerminalPreview, 250);
+  }
+
   liveTextarea.value = '';
   // Clear attachments — revoke thumb URLs first.
   for (const a of state.attach.pending) {
@@ -1718,6 +1800,110 @@ if (liveLoadEarlierBtn) {
   _loadEarlierObserver.observe(liveLoadEarlierBtn);
 }
 
+// ─── Terminal preview (HITL surfacing) ───────────────────────────────────────
+//
+// Why this exists: the live tail only sees what claude writes to its jsonl —
+// permission prompts, plan-mode menus and other HITL UI live in the TUI and
+// never make it to disk. Fetching `tmux capture-pane` (or cmux surface.read_text)
+// gives us a plain-text snapshot of the visible pane, which is enough for the
+// user to see "Do you want to proceed? (y/n)" or the numbered plan menu and
+// type the appropriate response into the input bar.
+
+const TERMINAL_POLL_MS = 2000;
+
+function setTerminalStatus(text) {
+  if (liveTerminalStatus) liveTerminalStatus.textContent = text || '';
+}
+
+function applyPaneSnapshot(msg) {
+  if (!liveTerminalPanel) return;
+  if (msg && msg.error) {
+    liveTerminalPanel.innerHTML = '';
+    const empty = el('div', 'live-terminal-empty', escapeHtml(msg.error));
+    liveTerminalPanel.appendChild(empty);
+    setTerminalStatus('오류');
+    state.terminal.inflight = false;
+    return;
+  }
+  const text = msg && typeof msg.text === 'string' ? msg.text : '';
+  // tmux/cmux snapshots are wrapped to the pane width and often padded with
+  // trailing whitespace. Trim trailing blank lines and right-trim each line so
+  // the panel doesn't look full of empty rows.
+  const lines = text.replace(/\s+$/, '').split('\n').map((l) => l.replace(/\s+$/, ''));
+  // Drop leading blank lines too.
+  while (lines.length > 0 && lines[0] === '') lines.shift();
+  const trimmed = lines.join('\n');
+  liveTerminalPanel.textContent = trimmed || '(빈 화면)';
+  state.terminal.lastUpdated = Date.now();
+  state.terminal.lastSource = (msg && msg.source) || null;
+  const stamp = new Date(state.terminal.lastUpdated).toLocaleTimeString();
+  const src = state.terminal.lastSource ? ' · ' + state.terminal.lastSource : '';
+  setTerminalStatus(stamp + src);
+  state.terminal.inflight = false;
+  // Keep scrolled to the bottom so the latest TUI line is visible.
+  liveTerminalPanel.scrollTop = liveTerminalPanel.scrollHeight;
+}
+
+function refreshTerminalPreview() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (state.terminal.inflight) return;
+  if (!isForwardingAvailable()) {
+    setTerminalStatus('연결된 외부 세션 없음');
+    return;
+  }
+  state.terminal.inflight = true;
+  setTerminalStatus('갱신 중…');
+  try {
+    state.ws.send(JSON.stringify({ type: 'capture_pane' }));
+  } catch (_) {
+    state.terminal.inflight = false;
+  }
+}
+
+function setTerminalOpen(open) {
+  if (!liveTerminalPanel || !liveTerminalToggle) return;
+  state.terminal.open = !!open;
+  liveTerminalPanel.hidden = !state.terminal.open;
+  liveTerminalToggle.classList.toggle('active', state.terminal.open);
+  liveTerminalToggle.setAttribute('aria-pressed', state.terminal.open ? 'true' : 'false');
+  if (liveTerminalRefresh) liveTerminalRefresh.hidden = !state.terminal.open;
+  if (state.terminal.open) {
+    refreshTerminalPreview();
+    if (state.terminal.pollTimer) clearInterval(state.terminal.pollTimer);
+    state.terminal.pollTimer = setInterval(refreshTerminalPreview, TERMINAL_POLL_MS);
+  } else {
+    if (state.terminal.pollTimer) {
+      clearInterval(state.terminal.pollTimer);
+      state.terminal.pollTimer = null;
+    }
+    setTerminalStatus('');
+  }
+}
+
+if (liveTerminalToggle) {
+  liveTerminalToggle.addEventListener('click', () => {
+    setTerminalOpen(!state.terminal.open);
+  });
+}
+if (liveTerminalRefresh) {
+  liveTerminalRefresh.addEventListener('click', () => { refreshTerminalPreview(); });
+}
+
+// Pause polling when the page goes to the background to be kind to the server.
+document.addEventListener('visibilitychange', () => {
+  if (!state.terminal.open) return;
+  if (document.hidden) {
+    if (state.terminal.pollTimer) {
+      clearInterval(state.terminal.pollTimer);
+      state.terminal.pollTimer = null;
+    }
+  } else {
+    refreshTerminalPreview();
+    if (state.terminal.pollTimer) clearInterval(state.terminal.pollTimer);
+    state.terminal.pollTimer = setInterval(refreshTerminalPreview, TERMINAL_POLL_MS);
+  }
+});
+
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function openWS() {
   setConnState('connecting');
@@ -1867,6 +2053,10 @@ function openWS() {
     }
     if (type === 'error') {
       showToast(msg.message || '오류가 발생했습니다.', 'error');
+      return;
+    }
+    if (type === 'pane_snapshot') {
+      applyPaneSnapshot(msg);
       return;
     }
     if (type === 'closed') {

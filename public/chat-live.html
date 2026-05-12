@@ -137,6 +137,76 @@
     flex-shrink: 0;
     opacity: 0.85;
   }
+
+  /* Optimistic-send marker on user bubbles awaiting jsonl confirmation. */
+  .msg-row.user .msg-bubble.optimistic {
+    opacity: 0.65;
+    border: 1px dashed var(--accent);
+  }
+  .msg-row.user .msg-bubble.optimistic::after {
+    content: "보냄 · 전달 확인 대기";
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--fg-dim);
+  }
+  .msg-row.user .msg-bubble.optimistic.confirmed {
+    opacity: 1;
+    border-style: solid;
+  }
+  .msg-row.user .msg-bubble.optimistic.confirmed::after {
+    content: "보냄 · 확인됨";
+    color: var(--success);
+  }
+
+  /* Terminal-preview panel (HITL surfacing). */
+  .live-terminal-panel {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.4;
+    max-height: 240px;
+    overflow: auto;
+    padding: 8px 12px;
+    white-space: pre;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .live-terminal-panel[hidden] { display: none; }
+  .live-terminal-panel .live-terminal-empty {
+    color: var(--fg-dim);
+    font-family: inherit;
+    white-space: normal;
+  }
+  .live-terminal-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .live-terminal-toolbar button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-dim);
+    border-radius: 6px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .live-terminal-toolbar button:hover { color: var(--fg); border-color: var(--fg-dim); }
+  .live-terminal-toolbar button.active { color: var(--accent); border-color: var(--accent); }
+  .live-terminal-toolbar button i, .live-terminal-toolbar button svg { width: 12px; height: 12px; }
+  .live-terminal-toolbar .live-terminal-status { margin-left: auto; }
 </style>
 </head>
 <body class="chat-page live-page">
@@ -218,8 +288,20 @@
   <div class="slash-picker-empty" id="slashPickerEmpty" hidden>일치하는 명령이 없습니다.</div>
 </div>
 
-<!-- ── Input bar (cmux-routed) ────────────────────────────────── -->
-<footer class="chat-input-bar">
+<!-- ── Terminal preview (HITL surfacing) ──────────────────────── -->
+<pre class="live-terminal-panel" id="liveTerminalPanel" hidden aria-label="외부 세션 터미널 미리보기"></pre>
+<div class="live-terminal-toolbar" id="liveTerminalToolbar">
+  <button id="liveTerminalToggle" type="button" aria-pressed="false" title="외부 세션의 현재 화면(권한·플랜 메뉴 등 HITL)">
+    <i data-lucide="monitor"></i>
+    <span>터미널 보기</span>
+  </button>
+  <button id="liveTerminalRefresh" type="button" hidden title="지금 새로고침">
+    <i data-lucide="refresh-cw"></i>
+  </button>
+  <span class="live-terminal-status" id="liveTerminalStatus"></span>
+</div>
+
+<!-- ── Input bar (cmux-routed) ────────────────────────────────── --><footer class="chat-input-bar">
   <!-- Pending attachments (chips, above the textarea) -->
   <div class="chat-attach-strip" id="liveAttachStrip" hidden></div>
   <div class="chat-input-inner">
@@ -253,6 +335,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260511a"></script>
+<script src="/static/chat-live.js?v=20260512b"></script>
 </body>
 </html>
