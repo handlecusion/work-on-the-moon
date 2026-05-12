@@ -794,12 +794,15 @@ function renderToolUseCard(evt) {
   appendNode(row);
 
   // For live-tailed AskUserQuestion (not initial transcript replay), scroll
-  // the picker into view. Without this, when other events follow the tool_use
-  // and trigger an auto-scroll to bottom, the picker drifts above the
-  // viewport and the user never sees it.
+  // the picker into view AND unpin from bottom. Without unpinning, every
+  // subsequent event's appendNode() calls scrollToBottom() which yanks the
+  // viewport away from the picker before the user has a chance to read it.
   if (isAsk && appendTargetOverride === null) {
+    console.log('[wotm] AskUserQuestion picker arrived — centering view', { toolUseId });
+    state.pinned = false;
+    if (typeof scrollBtn !== 'undefined' && scrollBtn) scrollBtn.classList.add('visible');
     requestAnimationFrame(() => {
-      try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+      try { card.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (_) {}
     });
   }
 }
