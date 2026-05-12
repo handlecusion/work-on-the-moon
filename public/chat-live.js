@@ -775,6 +775,19 @@ function renderToolUseCard(evt) {
 
   if (toolUseId) toolUseElements.set(toolUseId, { card, bodyEl, name, input });
 
+  // AskUserQuestion is a call-to-action — the picker buttons must be visible
+  // on arrival, not hidden behind the default collapsed header. Force the
+  // card into the expanded state so the user can answer immediately.
+  if (name === 'AskUserQuestion') {
+    card.classList.add('expanded');
+    const header = card.querySelector('.msg-card-header');
+    if (header) {
+      header.setAttribute('aria-expanded', 'true');
+      const toggle = header.querySelector('.card-toggle');
+      if (toggle) toggle.innerHTML = '<i data-lucide="chevron-up"></i>';
+    }
+  }
+
   const row = el('div', 'msg-row assistant');
   row.appendChild(card);
   appendNode(row);
