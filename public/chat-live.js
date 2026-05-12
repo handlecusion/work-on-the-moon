@@ -778,7 +778,8 @@ function renderToolUseCard(evt) {
   // AskUserQuestion is a call-to-action — the picker buttons must be visible
   // on arrival, not hidden behind the default collapsed header. Force the
   // card into the expanded state so the user can answer immediately.
-  if (name === 'AskUserQuestion') {
+  const isAsk = name === 'AskUserQuestion';
+  if (isAsk) {
     card.classList.add('expanded');
     const header = card.querySelector('.msg-card-header');
     if (header) {
@@ -791,6 +792,16 @@ function renderToolUseCard(evt) {
   const row = el('div', 'msg-row assistant');
   row.appendChild(card);
   appendNode(row);
+
+  // For live-tailed AskUserQuestion (not initial transcript replay), scroll
+  // the picker into view. Without this, when other events follow the tool_use
+  // and trigger an auto-scroll to bottom, the picker drifts above the
+  // viewport and the user never sees it.
+  if (isAsk && appendTargetOverride === null) {
+    requestAnimationFrame(() => {
+      try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+    });
+  }
 }
 
 function updateToolResultBody(evt) {
