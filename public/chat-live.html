@@ -327,6 +327,25 @@
     from { transform: translateY(8px); opacity: 0; }
     to   { transform: translateY(0); opacity: 1; }
   }
+  .tui-picker-cancel {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-dim);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    z-index: 1;
+  }
+  .tui-picker-cancel:hover { color: var(--fg); border-color: var(--fg-dim); }
+  .tui-picker-cancel i, .tui-picker-cancel svg { width: 12px; height: 12px; }
+  .tui-picker-overlay.cancelling { opacity: 0.6; }
 </style>
 </head>
 <body class="chat-page live-page">
@@ -462,6 +481,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260513e"></script>
+<script src="/static/chat-live.js?v=20260513f"></script>
 </body>
 </html>

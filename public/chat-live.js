@@ -2214,11 +2214,22 @@ function renderTuiPickerOverlay(picker) {
   // Seed local highlight from TUI's reported highlight (default 0 if none).
   state.tuiPicker.optionCount = picker.options.length;
   state.tuiPicker.localHl = picker.highlightedIdx >= 0 ? picker.highlightedIdx : 0;
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'tui-picker-cancel';
+  cancelBtn.title = '답변 취소 (Esc)';
+  cancelBtn.innerHTML = '<i data-lucide="x"></i><span>취소 (Esc)</span>';
+  cancelBtn.addEventListener('click', cancelTuiPicker);
+
   const root = buildAskPicker(questions, {
     onPick: (qIdx, optIdx) => onTuiPickerClick(optIdx),
     highlightedIdx: state.tuiPicker.localHl,
   });
+
+  tuiPickerOverlay.classList.remove('cancelling');
   tuiPickerOverlay.innerHTML = '';
+  tuiPickerOverlay.appendChild(cancelBtn);
   tuiPickerOverlay.appendChild(root);
   tuiPickerOverlay.hidden = false;
   if (typeof renderIcons === 'function') renderIcons();
@@ -2258,35 +2269,79 @@ function hideTuiPickerOverlay() {
   tuiPickerOverlay.innerHTML = '';
 }
 
-// Keyboard navigation for the picker overlay. Arrow up/down move the local
-// highlight, Enter submits the highlighted option, 1-9 jump+submit directly.
-// Hijacked at document level but only when the focus isn't inside a text
-// field, so typing in the input bar is unaffected.
+// Cancel the picker by forwarding Escape to the TUI. The TUI dismisses the
+// picker, the next capture-pane poll detects it's gone, and the overlay hides
+// itself. Reachable via Esc key or the cancel button in the overlay.
+function cancelTuiPicker() {
+  if (state.tuiPicker.pending) return;
+  if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    // Even if we can't forward, hide the overlay locally so user isn't stuck.
+    hideTuiPickerOverlay();
+    return;
+  }
+  state.tuiPicker.pending = true;
+  if (tuiPickerOverlay) {
+    tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b) => { b.disabled = true; });
+    tuiPickerOverlay.classList.add('cancelling');
+  }
+  try { state.ws.send(JSON.stringify({ type: 'send', key: 'escape' })); } catch (_) {}
+  setTimeout(refreshTerminalPreview, 250);
+  setTimeout(refreshTerminalPreview, 900);
+}
+
+// Keyboard navigation for the picker overlay.
+// - ArrowUp/Down and Esc are hijacked ALWAYS when picker is active (even
+//   when typing in the input bar), matching the slash-picker UX.
+// - Enter, j/k, and 1-9 only apply when the focus isn't in a text field,
+//   so typing in the input bar still sends messages and produces numeric
+//   characters normally.
 document.addEventListener('keydown', (e) => {
   if (!state.tuiPicker.active) return;
-  if (state.tuiPicker.pending) return;
   if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
   const t = e.target;
-  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) return;
+  const inField = t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable);
   const count = state.tuiPicker.optionCount;
   if (!count) return;
 
-  if (e.key === 'ArrowDown' || e.key === 'j') {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    cancelTuiPicker();
+    return;
+  }
+
+  if (state.tuiPicker.pending) return;
+
+  if (e.key === 'ArrowDown') {
     e.preventDefault();
     state.tuiPicker.localHl = Math.min((state.tuiPicker.localHl < 0 ? -1 : state.tuiPicker.localHl) + 1, count - 1);
     syncTuiPickerHighlight();
     return;
   }
-  if (e.key === 'ArrowUp' || e.key === 'k') {
+  if (e.key === 'ArrowUp') {
     e.preventDefault();
     state.tuiPicker.localHl = Math.max((state.tuiPicker.localHl < 0 ? count : state.tuiPicker.localHl) - 1, 0);
     syncTuiPickerHighlight();
     return;
   }
+
+  if (inField) return;
+
   if (e.key === 'Enter') {
     e.preventDefault();
     const idx = state.tuiPicker.localHl >= 0 ? state.tuiPicker.localHl : 0;
     onTuiPickerClick(idx);
+    return;
+  }
+  if (e.key === 'j') {
+    e.preventDefault();
+    state.tuiPicker.localHl = Math.min(state.tuiPicker.localHl + 1, count - 1);
+    syncTuiPickerHighlight();
+    return;
+  }
+  if (e.key === 'k') {
+    e.preventDefault();
+    state.tuiPicker.localHl = Math.max(state.tuiPicker.localHl - 1, 0);
+    syncTuiPickerHighlight();
     return;
   }
   if (/^[1-9]$/.test(e.key)) {
