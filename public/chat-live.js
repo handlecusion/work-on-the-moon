@@ -81,6 +81,8 @@ const state = {
     active: false,
     pending: false,     // user clicked, awaiting TUI advance
     pendingIdx: -1,
+    localHl: -1,        // local highlight index (keyboard nav); -1 = follow TUI
+    optionCount: 0,
   },
 };
 
@@ -2209,9 +2211,12 @@ function renderTuiPickerOverlay(picker) {
     multiSelect: false,
     options: picker.options,
   }];
+  // Seed local highlight from TUI's reported highlight (default 0 if none).
+  state.tuiPicker.optionCount = picker.options.length;
+  state.tuiPicker.localHl = picker.highlightedIdx >= 0 ? picker.highlightedIdx : 0;
   const root = buildAskPicker(questions, {
     onPick: (qIdx, optIdx) => onTuiPickerClick(optIdx),
-    highlightedIdx: picker.highlightedIdx,
+    highlightedIdx: state.tuiPicker.localHl,
   });
   tuiPickerOverlay.innerHTML = '';
   tuiPickerOverlay.appendChild(root);
@@ -2219,11 +2224,26 @@ function renderTuiPickerOverlay(picker) {
   if (typeof renderIcons === 'function') renderIcons();
 }
 
+function syncTuiPickerHighlight() {
+  if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
+  const hl = state.tuiPicker.localHl;
+  tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b, i) => {
+    b.classList.toggle('tui-highlighted', i === hl);
+  });
+}
+
+// Called when the same picker is still in the TUI but its highlight moved.
+// We only follow the TUI's highlight if the user hasn't navigated locally
+// (signalled by localHl matching what we last seeded).
 function updateTuiPickerHighlight(newHlIdx) {
   if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
-  tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b, i) => {
-    b.classList.toggle('tui-highlighted', i === newHlIdx);
-  });
+  // Don't override user's local nav.
+  // (We can't tell perfectly, so just always follow TUI for now — it matches
+  //  the user's mental model when they pick via terminal directly.)
+  if (newHlIdx >= 0) {
+    state.tuiPicker.localHl = newHlIdx;
+    syncTuiPickerHighlight();
+  }
 }
 
 function hideTuiPickerOverlay() {
@@ -2232,9 +2252,54 @@ function hideTuiPickerOverlay() {
   state.tuiPicker.active = false;
   state.tuiPicker.pending = false;
   state.tuiPicker.pendingIdx = -1;
+  state.tuiPicker.localHl = -1;
+  state.tuiPicker.optionCount = 0;
   tuiPickerOverlay.hidden = true;
   tuiPickerOverlay.innerHTML = '';
 }
+
+// Keyboard navigation for the picker overlay. Arrow up/down move the local
+// highlight, Enter submits the highlighted option, 1-9 jump+submit directly.
+// Hijacked at document level but only when the focus isn't inside a text
+// field, so typing in the input bar is unaffected.
+document.addEventListener('keydown', (e) => {
+  if (!state.tuiPicker.active) return;
+  if (state.tuiPicker.pending) return;
+  if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
+  const t = e.target;
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) return;
+  const count = state.tuiPicker.optionCount;
+  if (!count) return;
+
+  if (e.key === 'ArrowDown' || e.key === 'j') {
+    e.preventDefault();
+    state.tuiPicker.localHl = Math.min((state.tuiPicker.localHl < 0 ? -1 : state.tuiPicker.localHl) + 1, count - 1);
+    syncTuiPickerHighlight();
+    return;
+  }
+  if (e.key === 'ArrowUp' || e.key === 'k') {
+    e.preventDefault();
+    state.tuiPicker.localHl = Math.max((state.tuiPicker.localHl < 0 ? count : state.tuiPicker.localHl) - 1, 0);
+    syncTuiPickerHighlight();
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const idx = state.tuiPicker.localHl >= 0 ? state.tuiPicker.localHl : 0;
+    onTuiPickerClick(idx);
+    return;
+  }
+  if (/^[1-9]$/.test(e.key)) {
+    const idx = parseInt(e.key, 10) - 1;
+    if (idx < count) {
+      e.preventDefault();
+      state.tuiPicker.localHl = idx;
+      syncTuiPickerHighlight();
+      onTuiPickerClick(idx);
+    }
+    return;
+  }
+});
 
 function onTuiPickerClick(optIdx) {
   if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
