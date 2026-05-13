@@ -2303,8 +2303,12 @@ document.addEventListener('keydown', (e) => {
   const count = state.tuiPicker.optionCount;
   if (!count) return;
 
+  // Debug: log every key the listener sees while picker is active.
+  console.log('[wotm picker key]', e.key, 'inField=' + inField + ' pending=' + state.tuiPicker.pending + ' count=' + count);
+
   if (e.key === 'Escape') {
     e.preventDefault();
+    e.stopPropagation();
     cancelTuiPicker();
     return;
   }
@@ -2354,7 +2358,7 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
-});
+}, { capture: true });
 
 function onTuiPickerClick(optIdx) {
   if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
