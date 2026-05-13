@@ -83,6 +83,7 @@ const state = {
     pendingIdx: -1,
     localHl: -1,        // local highlight index (keyboard nav); -1 = follow TUI
     optionCount: 0,
+    typeSomethingIdx: -1, // index of "Type something" / free-form option, or -1
   },
 };
 
@@ -2215,6 +2216,17 @@ function renderTuiPickerOverlay(picker) {
   state.tuiPicker.optionCount = picker.options.length;
   state.tuiPicker.localHl = picker.highlightedIdx >= 0 ? picker.highlightedIdx : 0;
 
+  // Detect a free-form "Type something" / 입력 option so we can show a text
+  // input alongside the buttons. AskUserQuestion adds this option implicitly;
+  // we match case-insensitive English + Korean variants.
+  state.tuiPicker.typeSomethingIdx = -1;
+  picker.options.forEach((o, i) => {
+    const lbl = String((o && o.label) || '').toLowerCase().trim();
+    if (lbl === 'type something' || /^type\s/.test(lbl) || /^(직접 입력|타이핑|입력)/.test(o.label || '')) {
+      state.tuiPicker.typeSomethingIdx = i;
+    }
+  });
+
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
   cancelBtn.className = 'tui-picker-cancel';
@@ -2231,6 +2243,45 @@ function renderTuiPickerOverlay(picker) {
   tuiPickerOverlay.innerHTML = '';
   tuiPickerOverlay.appendChild(cancelBtn);
   tuiPickerOverlay.appendChild(root);
+
+  // Free-form text input. Always shown — if there's a "Type something" option
+  // we select it first then send the typed text; otherwise we just send the
+  // text and Enter and let the TUI handle it.
+  const inputRow = document.createElement('div');
+  inputRow.className = 'tui-picker-input-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tui-picker-input';
+  input.placeholder = state.tuiPicker.typeSomethingIdx >= 0
+    ? '직접 입력 (Enter로 전송)'
+    : '직접 입력 (Enter로 전송 — TUI가 free-form을 받지 않으면 무시될 수 있음)';
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'tui-picker-input-send';
+  submit.innerHTML = '<i data-lucide="send"></i>';
+  submit.title = '전송';
+  const sendFreeForm = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    onTuiPickerFreeFormSubmit(text);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      sendFreeForm();
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelTuiPicker();
+    }
+  });
+  submit.addEventListener('click', sendFreeForm);
+  inputRow.appendChild(input);
+  inputRow.appendChild(submit);
+  tuiPickerOverlay.appendChild(inputRow);
+
   tuiPickerOverlay.hidden = false;
   if (typeof renderIcons === 'function') renderIcons();
 
@@ -2246,6 +2297,38 @@ function renderTuiPickerOverlay(picker) {
       try { target.focus({ preventScroll: true }); } catch (_) { target.focus(); }
     }
   });
+}
+
+// Submit a free-form typed answer. If a "Type something" option exists,
+// select it first (so the TUI is ready for text input), then send the text
+// with a small delay to let the TUI advance. Otherwise just send the text
+// followed by Enter and let the TUI decide.
+function onTuiPickerFreeFormSubmit(text) {
+  if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    showToast('외부 세션 연결이 없어 답변 전송 불가', 'error');
+    return;
+  }
+  state.tuiPicker.pending = true;
+  if (tuiPickerOverlay) {
+    tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b) => { b.disabled = true; });
+    const inp = tuiPickerOverlay.querySelector('.tui-picker-input');
+    if (inp) inp.disabled = true;
+    const sbtn = tuiPickerOverlay.querySelector('.tui-picker-input-send');
+    if (sbtn) sbtn.disabled = true;
+  }
+  const tsIdx = state.tuiPicker.typeSomethingIdx;
+  if (tsIdx >= 0) {
+    try { state.ws.send(JSON.stringify({ type: 'send', text: String(tsIdx + 1) + '\n' })); } catch (_) {}
+    // Give the TUI a moment to advance into text-input mode before pushing
+    // the actual text + Enter.
+    setTimeout(() => {
+      try { state.ws.send(JSON.stringify({ type: 'send', text: text + '\n' })); } catch (_) {}
+    }, 350);
+  } else {
+    try { state.ws.send(JSON.stringify({ type: 'send', text: text + '\n' })); } catch (_) {}
+  }
+  setTimeout(refreshTerminalPreview, 600);
+  setTimeout(refreshTerminalPreview, 1500);
 }
 
 function syncTuiPickerHighlight() {
@@ -2289,7 +2372,11 @@ function hideTuiPickerOverlay() {
   state.tuiPicker.pendingIdx = -1;
   state.tuiPicker.localHl = -1;
   state.tuiPicker.optionCount = 0;
+  state.tuiPicker.typeSomethingIdx = -1;
   tuiPickerOverlay.hidden = true;
+  // Strip any transient state classes left over from a cancel-in-progress so
+  // the next render doesn't inherit the dimmed look.
+  tuiPickerOverlay.classList.remove('cancelling');
   tuiPickerOverlay.innerHTML = '';
   if (hadFocus && liveTextarea && !liveTextarea.disabled) {
     try { liveTextarea.focus({ preventScroll: true }); } catch (_) { liveTextarea.focus(); }

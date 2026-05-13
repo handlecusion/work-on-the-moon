@@ -346,6 +346,45 @@
   .tui-picker-cancel:hover { color: var(--fg); border-color: var(--fg-dim); }
   .tui-picker-cancel i, .tui-picker-cancel svg { width: 12px; height: 12px; }
   .tui-picker-overlay.cancelling { opacity: 0.6; }
+
+  .tui-picker-input-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    align-items: stretch;
+  }
+  .tui-picker-input {
+    flex: 1 1 auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.35;
+    outline: none;
+  }
+  .tui-picker-input:focus {
+    border-color: var(--accent);
+  }
+  .tui-picker-input:disabled { opacity: 0.5; cursor: default; }
+  .tui-picker-input-send {
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 0 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tui-picker-input-send:hover:not(:disabled) {
+    background: var(--accent-hover, var(--accent));
+  }
+  .tui-picker-input-send:disabled { opacity: 0.5; cursor: default; }
+  .tui-picker-input-send i, .tui-picker-input-send svg { width: 14px; height: 14px; }
 </style>
 </head>
 <body class="chat-page live-page">
@@ -481,6 +520,6 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/diff@7.0.0/dist/diff.min.js"></script>
-<script src="/static/chat-live.js?v=20260513i"></script>
+<script src="/static/chat-live.js?v=20260513j"></script>
 </body>
 </html>
