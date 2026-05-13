@@ -69,6 +69,19 @@ const state = {
     lastUpdated: null,
     lastSource: null,
   },
+
+  // Live TUI picker overlay state. The detector parses each capture-pane
+  // snapshot for a numbered-option picker (claude AskUserQuestion / codex /
+  // hermes interactive prompts). When detected, an overlay above the input
+  // bar shows tappable buttons that send "<N>+Enter" via the existing send
+  // path. Signature dedupes identical pickers so we don't re-render on every
+  // poll.
+  tuiPicker: {
+    signature: null,    // string — question + options joined
+    active: false,
+    pending: false,     // user clicked, awaiting TUI advance
+    pendingIdx: -1,
+  },
 };
 
 // Module-level agent — set from init meta. Default 'claude' until init arrives;
@@ -107,6 +120,7 @@ const liveTerminalPanel   = $('liveTerminalPanel');
 const liveTerminalToggle  = $('liveTerminalToggle');
 const liveTerminalRefresh = $('liveTerminalRefresh');
 const liveTerminalStatus  = $('liveTerminalStatus');
+const tuiPickerOverlay    = $('tuiPickerOverlay');
 
 // ─── Session ID / cwd from URL ────────────────────────────────────────────────
 // Two URL shapes:
@@ -576,7 +590,11 @@ function bodyForWebSearch(input) {
 // option sends "<1-based index>\n" via the existing tmux/cmux forwarding path,
 // which the claude TUI picker accepts as "select option N + submit".
 
-function buildAskPicker(questions, toolUseId) {
+function buildAskPicker(questions, opts) {
+  // opts: { onPick: (qIdx, optIdx, label) => void, highlightedIdx?: number }
+  const onPick = opts && typeof opts.onPick === 'function' ? opts.onPick : null;
+  const highlightedIdx = opts && Number.isFinite(opts.highlightedIdx) ? opts.highlightedIdx : -1;
+
   const root = el('div', 'ask-picker');
   const list = Array.isArray(questions) ? questions : [];
   list.forEach((q, qIdx) => {
@@ -590,13 +608,13 @@ function buildAskPicker(questions, toolUseId) {
     qBlock.appendChild(qTxt);
 
     const isMulti = !!(q && q.multiSelect);
-    const opts = Array.isArray(q && q.options) ? q.options : [];
+    const optionsArr = Array.isArray(q && q.options) ? q.options : [];
     const listEl = el('div', 'ask-options' + (isMulti ? ' is-multi' : ''));
 
-    opts.forEach((o, optIdx) => {
+    optionsArr.forEach((o, optIdx) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'ask-option';
+      btn.className = 'ask-option' + (optIdx === highlightedIdx ? ' tui-highlighted' : '');
       btn.dataset.qIdx = String(qIdx);
       btn.dataset.optIdx = String(optIdx);
       btn.dataset.label = String((o && o.label) || '');
@@ -607,8 +625,10 @@ function buildAskPicker(questions, toolUseId) {
       if (isMulti) {
         btn.disabled = true;
         btn.title = '다중 선택은 터미널에서 직접 응답하세요';
+      } else if (onPick) {
+        btn.addEventListener('click', () => onPick(qIdx, optIdx, String((o && o.label) || '')));
       } else {
-        btn.addEventListener('click', () => onAskOptionPick(toolUseId, qIdx, optIdx));
+        btn.disabled = true;
       }
       listEl.appendChild(btn);
     });
@@ -760,7 +780,9 @@ function renderToolUseCard(evt) {
       iconName = 'help-circle'; labelText = '질문';
       const qs = Array.isArray(input.questions) ? input.questions : [];
       pillText = qs.length > 1 ? qs.length + '개' : null;
-      bodyNodeOrHtml = buildAskPicker(qs, toolUseId);
+      bodyNodeOrHtml = buildAskPicker(qs, {
+        onPick: (qIdx, optIdx) => onAskOptionPick(toolUseId, qIdx, optIdx),
+      });
       bodyClass = 'tool-body-ask';
       break;
     }
@@ -1565,11 +1587,13 @@ function isForwardingAvailable() {
 function applyCmuxMeta(cmux) {
   state.cmux = cmux || { available: false, surfaceId: null, workspaceId: null };
   setInputBarStatus();
+  if (typeof ensureCapturePolling === 'function') ensureCapturePolling();
 }
 
 function applyTmuxMeta(tmux) {
   state.tmux = tmux || { available: false, socketPath: null, paneId: null };
   setInputBarStatus();
+  if (typeof ensureCapturePolling === 'function') ensureCapturePolling();
 }
 
 // Update the source chip (liveSourcePill) to show "cmux", "tmux", or "terminal".
@@ -1972,16 +1996,24 @@ function setTerminalStatus(text) {
 }
 
 function applyPaneSnapshot(msg) {
-  if (!liveTerminalPanel) return;
-  if (msg && msg.error) {
+  const errorText = msg && msg.error ? String(msg.error) : null;
+  const snapText = msg && typeof msg.text === 'string' ? msg.text : '';
+
+  // Always feed the TUI picker detector — this is the live "before user
+  // answers" surface, since claude doesn't flush tool_use AskUserQuestion to
+  // jsonl until the user answers in the TUI. We bypass jsonl entirely here.
+  applyTuiPickerSnapshot(snapText, !!errorText);
+
+  if (!liveTerminalPanel) { state.terminal.inflight = false; return; }
+  if (errorText) {
     liveTerminalPanel.innerHTML = '';
-    const empty = el('div', 'live-terminal-empty', escapeHtml(msg.error));
+    const empty = el('div', 'live-terminal-empty', escapeHtml(errorText));
     liveTerminalPanel.appendChild(empty);
     setTerminalStatus('오류');
     state.terminal.inflight = false;
     return;
   }
-  const text = msg && typeof msg.text === 'string' ? msg.text : '';
+  const text = snapText;
   // tmux/cmux snapshots are wrapped to the pane width and often padded with
   // trailing whitespace. Trim trailing blank lines and right-trim each line so
   // the panel doesn't look full of empty rows.
@@ -2023,17 +2055,207 @@ function setTerminalOpen(open) {
   liveTerminalToggle.classList.toggle('active', state.terminal.open);
   liveTerminalToggle.setAttribute('aria-pressed', state.terminal.open ? 'true' : 'false');
   if (liveTerminalRefresh) liveTerminalRefresh.hidden = !state.terminal.open;
-  if (state.terminal.open) {
-    refreshTerminalPreview();
-    if (state.terminal.pollTimer) clearInterval(state.terminal.pollTimer);
-    state.terminal.pollTimer = setInterval(refreshTerminalPreview, TERMINAL_POLL_MS);
-  } else {
-    if (state.terminal.pollTimer) {
-      clearInterval(state.terminal.pollTimer);
-      state.terminal.pollTimer = null;
-    }
-    setTerminalStatus('');
+  if (state.terminal.open) refreshTerminalPreview();
+  else setTerminalStatus('');
+}
+
+// Capture-pane polling runs whenever forwarding is available, not gated on
+// the terminal preview panel. The TUI picker detector consumes every snapshot
+// to surface live AskUserQuestion-style pickers above the input bar.
+function ensureCapturePolling() {
+  if (state.terminal.pollTimer) return;
+  if (!isForwardingAvailable()) return;
+  refreshTerminalPreview();
+  state.terminal.pollTimer = setInterval(refreshTerminalPreview, TERMINAL_POLL_MS);
+}
+
+function stopCapturePolling() {
+  if (state.terminal.pollTimer) {
+    clearInterval(state.terminal.pollTimer);
+    state.terminal.pollTimer = null;
   }
+}
+
+// ─── TUI picker overlay (bypasses jsonl) ─────────────────────────────────────
+//
+// Claude Code doesn't flush a tool_use AskUserQuestion entry to jsonl until
+// the turn completes (i.e., until the user answers). The live tail therefore
+// can't show the picker while it's *pending*. To fix this we parse every
+// capture-pane snapshot for a numbered-option picker and render it directly
+// in an overlay above the input bar. Click sends "<N>+Enter" via tmux/cmux
+// and lets the TUI advance naturally; the next snapshot detects the picker
+// is gone and the overlay hides itself.
+//
+// Detection heuristic: a run of >= 2 sequentially-numbered "N. label" lines
+// where at least one line carries a selection marker (❯, >, ▶ …). The
+// question is the nearest non-empty line above the first option. Indented
+// follow-up lines are folded into the previous option's description.
+
+const TUI_NAV_HINT_RE = /^(↑|↓|→|←|\^|enter|esc|tab|space|backspace|return)\b/i;
+const TUI_OPT_LINE_RE = /^(\s*)([❯>►▶▸▷✱◦●❱→]?)\s*(\d+)[.)]\s+(.+?)\s*$/u;
+const TUI_MARKER_RE   = /[❯>►▶▸▷❱→]/;
+
+function stripAnsiQuick(s) {
+  return String(s || '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+}
+
+function detectTuiPicker(text) {
+  if (!text) return null;
+  const lines = stripAnsiQuick(text).split('\n').map((l) => l.replace(/\s+$/, ''));
+
+  let bestRun = null;
+  let runStart = -1;
+  let runOpts = [];
+  let runHl = -1;
+  let runHasMarker = false;
+
+  function commit() {
+    if (runOpts.length >= 2 && runHasMarker) {
+      // Last run wins — pickers always render near the cursor (bottom of pane).
+      bestRun = { start: runStart, opts: runOpts.slice(), highlightedIdx: runHl };
+    }
+    runStart = -1; runOpts = []; runHl = -1; runHasMarker = false;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) { commit(); continue; }
+    const m = ln.match(TUI_OPT_LINE_RE);
+    if (m) {
+      const num = parseInt(m[3], 10);
+      const label = m[4].trim();
+      const marker = m[2] && TUI_MARKER_RE.test(m[2]);
+      const expected = runOpts.length + 1;
+      if (num === expected) {
+        if (runStart < 0) runStart = i;
+        if (marker) { runHasMarker = true; runHl = runOpts.length; }
+        runOpts.push({ label });
+        continue;
+      }
+      if (num === 1) {
+        commit();
+        runStart = i;
+        if (marker) { runHasMarker = true; runHl = 0; }
+        runOpts.push({ label });
+        continue;
+      }
+      // Non-sequential number — break.
+      commit();
+      continue;
+    }
+    // Indented continuation: fold as description of last opt.
+    if (runOpts.length > 0 && /^\s{2,}\S/.test(ln) && !TUI_NAV_HINT_RE.test(ln.trim())) {
+      const last = runOpts[runOpts.length - 1];
+      const t = ln.trim();
+      last.description = last.description ? last.description + ' ' + t : t;
+      continue;
+    }
+    // Anything else ends the run.
+    commit();
+  }
+  commit();
+
+  if (!bestRun) return null;
+
+  // Question: nearest non-empty non-nav-hint line above the first option.
+  let question = '';
+  for (let i = bestRun.start - 1; i >= Math.max(0, bestRun.start - 14); i--) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    if (TUI_NAV_HINT_RE.test(t)) continue;
+    // Skip pure punctuation / decoration lines.
+    if (/^[─━═\-=*•]+$/.test(t)) continue;
+    question = t;
+    break;
+  }
+
+  return {
+    question: question || '외부 세션이 선택을 기다립니다',
+    options: bestRun.opts.map((o) => ({ label: o.label, description: o.description || '' })),
+    highlightedIdx: bestRun.highlightedIdx,
+  };
+}
+
+function pickerSignature(p) {
+  if (!p) return null;
+  return p.question + '||' + p.options.map((o) => o.label).join('|');
+}
+
+function applyTuiPickerSnapshot(text, isError) {
+  if (isError) { hideTuiPickerOverlay(); return; }
+  const picker = detectTuiPicker(text);
+  if (!picker) {
+    if (state.tuiPicker.active) hideTuiPickerOverlay();
+    return;
+  }
+  const sig = pickerSignature(picker);
+  if (state.tuiPicker.signature === sig) {
+    // Same picker still showing — just refresh highlight.
+    if (!state.tuiPicker.pending) updateTuiPickerHighlight(picker.highlightedIdx);
+    return;
+  }
+  state.tuiPicker.signature = sig;
+  state.tuiPicker.active = true;
+  state.tuiPicker.pending = false;
+  state.tuiPicker.pendingIdx = -1;
+  renderTuiPickerOverlay(picker);
+}
+
+function renderTuiPickerOverlay(picker) {
+  if (!tuiPickerOverlay) return;
+  const questions = [{
+    question: picker.question,
+    header: 'live',
+    multiSelect: false,
+    options: picker.options,
+  }];
+  const root = buildAskPicker(questions, {
+    onPick: (qIdx, optIdx) => onTuiPickerClick(optIdx),
+    highlightedIdx: picker.highlightedIdx,
+  });
+  tuiPickerOverlay.innerHTML = '';
+  tuiPickerOverlay.appendChild(root);
+  tuiPickerOverlay.hidden = false;
+  if (typeof renderIcons === 'function') renderIcons();
+}
+
+function updateTuiPickerHighlight(newHlIdx) {
+  if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
+  tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b, i) => {
+    b.classList.toggle('tui-highlighted', i === newHlIdx);
+  });
+}
+
+function hideTuiPickerOverlay() {
+  if (!tuiPickerOverlay) return;
+  state.tuiPicker.signature = null;
+  state.tuiPicker.active = false;
+  state.tuiPicker.pending = false;
+  state.tuiPicker.pendingIdx = -1;
+  tuiPickerOverlay.hidden = true;
+  tuiPickerOverlay.innerHTML = '';
+}
+
+function onTuiPickerClick(optIdx) {
+  if (!isForwardingAvailable() || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    showToast('외부 세션 연결이 없어 답변 전송 불가', 'error');
+    return;
+  }
+  state.tuiPicker.pending = true;
+  state.tuiPicker.pendingIdx = optIdx;
+  // Optimistic UI: mark chosen + disable all options.
+  if (tuiPickerOverlay) {
+    tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b, i) => {
+      b.disabled = true;
+      if (i === optIdx) b.classList.add('sent');
+    });
+  }
+  // Trailing \n is peeled into a separate Enter key by tmuxClient.
+  const text = String(optIdx + 1) + '\n';
+  try { state.ws.send(JSON.stringify({ type: 'send', text })); } catch (_) {}
+  // Trigger faster refresh so the overlay disappears once the TUI advances.
+  setTimeout(refreshTerminalPreview, 250);
+  setTimeout(refreshTerminalPreview, 900);
 }
 
 if (liveTerminalToggle) {
@@ -2045,19 +2267,12 @@ if (liveTerminalRefresh) {
   liveTerminalRefresh.addEventListener('click', () => { refreshTerminalPreview(); });
 }
 
-// Pause polling when the page goes to the background to be kind to the server.
+// Pause capture-pane polling when the page goes to the background; resume on
+// foreground. This applies regardless of terminal preview panel state because
+// the picker detector also consumes snapshots.
 document.addEventListener('visibilitychange', () => {
-  if (!state.terminal.open) return;
-  if (document.hidden) {
-    if (state.terminal.pollTimer) {
-      clearInterval(state.terminal.pollTimer);
-      state.terminal.pollTimer = null;
-    }
-  } else {
-    refreshTerminalPreview();
-    if (state.terminal.pollTimer) clearInterval(state.terminal.pollTimer);
-    state.terminal.pollTimer = setInterval(refreshTerminalPreview, TERMINAL_POLL_MS);
-  }
+  if (document.hidden) stopCapturePolling();
+  else ensureCapturePolling();
 });
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
