@@ -2295,6 +2295,12 @@ function cancelTuiPicker() {
 // - Enter, j/k, and 1-9 only apply when the focus isn't in a text field,
 //   so typing in the input bar still sends messages and produces numeric
 //   characters normally.
+function stopAll(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+}
+
 document.addEventListener('keydown', (e) => {
   if (!state.tuiPicker.active) return;
   if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
@@ -2303,61 +2309,55 @@ document.addEventListener('keydown', (e) => {
   const count = state.tuiPicker.optionCount;
   if (!count) return;
 
-  // Debug: log every key the listener sees while picker is active.
-  console.log('[wotm picker key]', e.key, 'inField=' + inField + ' pending=' + state.tuiPicker.pending + ' count=' + count);
+  let branch = 'fallthrough';
 
   if (e.key === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
+    branch = 'esc';
+    stopAll(e);
     cancelTuiPicker();
-    return;
-  }
-
-  if (state.tuiPicker.pending) return;
-
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
+  } else if (state.tuiPicker.pending) {
+    branch = 'pending-skip';
+  } else if (e.key === 'ArrowDown') {
+    branch = 'arrow-down';
+    stopAll(e);
     state.tuiPicker.localHl = Math.min((state.tuiPicker.localHl < 0 ? -1 : state.tuiPicker.localHl) + 1, count - 1);
     syncTuiPickerHighlight();
-    return;
-  }
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
+  } else if (e.key === 'ArrowUp') {
+    branch = 'arrow-up';
+    stopAll(e);
     state.tuiPicker.localHl = Math.max((state.tuiPicker.localHl < 0 ? count : state.tuiPicker.localHl) - 1, 0);
     syncTuiPickerHighlight();
-    return;
-  }
-
-  if (inField) return;
-
-  if (e.key === 'Enter') {
-    e.preventDefault();
+  } else if (inField) {
+    branch = 'in-field-skip';
+  } else if (e.key === 'Enter') {
+    branch = 'enter-submit';
+    stopAll(e);
     const idx = state.tuiPicker.localHl >= 0 ? state.tuiPicker.localHl : 0;
     onTuiPickerClick(idx);
-    return;
-  }
-  if (e.key === 'j') {
-    e.preventDefault();
+  } else if (e.key === 'j') {
+    branch = 'j-down';
+    stopAll(e);
     state.tuiPicker.localHl = Math.min(state.tuiPicker.localHl + 1, count - 1);
     syncTuiPickerHighlight();
-    return;
-  }
-  if (e.key === 'k') {
-    e.preventDefault();
+  } else if (e.key === 'k') {
+    branch = 'k-up';
+    stopAll(e);
     state.tuiPicker.localHl = Math.max(state.tuiPicker.localHl - 1, 0);
     syncTuiPickerHighlight();
-    return;
-  }
-  if (/^[1-9]$/.test(e.key)) {
+  } else if (/^[1-9]$/.test(e.key)) {
     const idx = parseInt(e.key, 10) - 1;
     if (idx < count) {
-      e.preventDefault();
+      branch = 'digit-' + e.key;
+      stopAll(e);
       state.tuiPicker.localHl = idx;
       syncTuiPickerHighlight();
       onTuiPickerClick(idx);
+    } else {
+      branch = 'digit-out-of-range';
     }
-    return;
   }
+
+  console.log('[wotm picker key]', e.key, 'branch=' + branch, 'inField=' + inField, 'localHl=' + state.tuiPicker.localHl, 'pending=' + state.tuiPicker.pending);
 }, { capture: true });
 
 function onTuiPickerClick(optIdx) {
