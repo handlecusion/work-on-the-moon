@@ -2233,14 +2233,35 @@ function renderTuiPickerOverlay(picker) {
   tuiPickerOverlay.appendChild(root);
   tuiPickerOverlay.hidden = false;
   if (typeof renderIcons === 'function') renderIcons();
+
+  // Move keyboard focus into the picker so the textarea stops consuming
+  // arrow keys (browsers route arrow keys in a textarea to text-cursor nav,
+  // which on some platforms can race past our document-level listener).
+  // With a button focused, native key behavior is a no-op and our handler
+  // owns the arrow/Enter routing.
+  requestAnimationFrame(() => {
+    const target = tuiPickerOverlay.querySelector('.ask-option.tui-highlighted')
+                || tuiPickerOverlay.querySelector('.ask-option');
+    if (target) {
+      try { target.focus({ preventScroll: true }); } catch (_) { target.focus(); }
+    }
+  });
 }
 
 function syncTuiPickerHighlight() {
   if (!tuiPickerOverlay || tuiPickerOverlay.hidden) return;
   const hl = state.tuiPicker.localHl;
+  let target = null;
   tuiPickerOverlay.querySelectorAll('.ask-option').forEach((b, i) => {
-    b.classList.toggle('tui-highlighted', i === hl);
+    const isHl = i === hl;
+    b.classList.toggle('tui-highlighted', isHl);
+    if (isHl) target = b;
   });
+  // Follow visual highlight with keyboard focus so Tab order matches and the
+  // native browser highlight ring tracks the picker selection.
+  if (target && document.activeElement !== target) {
+    try { target.focus({ preventScroll: true }); } catch (_) { target.focus(); }
+  }
 }
 
 // Called when the same picker is still in the TUI but its highlight moved.
@@ -2259,6 +2280,9 @@ function updateTuiPickerHighlight(newHlIdx) {
 
 function hideTuiPickerOverlay() {
   if (!tuiPickerOverlay) return;
+  // If focus was inside the overlay, restore it to the textarea so typing
+  // continues to land in the input bar after the picker closes.
+  const hadFocus = tuiPickerOverlay.contains(document.activeElement);
   state.tuiPicker.signature = null;
   state.tuiPicker.active = false;
   state.tuiPicker.pending = false;
@@ -2267,6 +2291,9 @@ function hideTuiPickerOverlay() {
   state.tuiPicker.optionCount = 0;
   tuiPickerOverlay.hidden = true;
   tuiPickerOverlay.innerHTML = '';
+  if (hadFocus && liveTextarea && !liveTextarea.disabled) {
+    try { liveTextarea.focus({ preventScroll: true }); } catch (_) { liveTextarea.focus(); }
+  }
 }
 
 // Cancel the picker by forwarding Escape to the TUI. The TUI dismisses the
