@@ -25,4 +25,6 @@ build/
 /tmp/
 *.tmp
 .playwright-mcp/
+/.wotm-uploads/
 /iphone14pro-*.png
+/my-offices-default.png
