@@ -133,10 +133,16 @@ const tuiPickerOverlay    = $('tuiPickerOverlay');
 //                                with no UUID)
 state.sessionId = null;
 state.cwd = null;
+state.agent = null;
 {
   const path = location.pathname;
   if (path.indexOf('/chat-live-cwd/') === 0) {
     state.cwd = decodeURIComponent(path.slice('/chat-live-cwd/'.length));
+    // Optional ?agent=<claude|codex|hermes> disambiguates which entry the
+    // resolver should pick when multiple agents share a cwd.
+    const params = new URLSearchParams(location.search);
+    const a = params.get('agent');
+    if (a) state.agent = a;
   } else {
     state.sessionId = decodeURIComponent(path.split('/').filter(Boolean).pop() || '');
   }
@@ -2533,6 +2539,7 @@ function openWS() {
     const hello = { type: 'hello' };
     if (state.sessionId) hello.sessionId = state.sessionId;
     else if (state.cwd) hello.cwd = state.cwd;
+    if (state.agent) hello.agent = state.agent;
     ws.send(JSON.stringify(hello));
     state._initTimer = setTimeout(() => {
       console.warn('[chat-live] init timeout — closing');

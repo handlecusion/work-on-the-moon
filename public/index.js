@@ -128,14 +128,18 @@ function renderLocalList(container, items) {
     if (it.busy) classes.push('busy');
     const sourceTxt = it.source || '';
     const pidTxt = it.pid != null ? String(it.pid) : '';
+    const localAgent = it.agent || 'claude';
     // Prefer sid-keyed link when sessionId is known; fall back to cwd-keyed
     // route for processes whose sessionId can't be resolved yet (e.g.
-    // `--continue` before the first message is written).
+    // `--continue` before the first message is written, or a freshly started
+    // codex before the rollout jsonl head is flushed). When multiple agents
+    // share a cwd, the cwd-keyed URL would otherwise collide; pin the agent
+    // via query string so the WS resolver picks the right entry.
     const href = sid
       ? '/chat-live/' + encodeURIComponent(sid)
-      : (cwd ? '/chat-live-cwd/' + encodeURIComponent(cwd) : '#');
-
-    const localAgent = it.agent || 'claude';
+      : (cwd
+          ? '/chat-live-cwd/' + encodeURIComponent(cwd) + '?agent=' + encodeURIComponent(localAgent)
+          : '#');
     const localAgentIcon = localAgent === 'codex' ? 'openai' : (localAgent === 'hermes' ? 'hermes' : 'anthropic');
 
     html.push(
@@ -175,11 +179,12 @@ function renderLocalList(container, items) {
     a.addEventListener('click', (e) => {
       const sid = a.getAttribute('data-sid');
       const cwd = a.getAttribute('data-cwd');
+      const agent = a.getAttribute('data-agent') || 'claude';
       if (!sid && !cwd) return; // truly inactive entry, let default `#` happen
       e.preventDefault();
       location.href = sid
         ? '/chat-live/' + encodeURIComponent(sid)
-        : '/chat-live-cwd/' + encodeURIComponent(cwd);
+        : '/chat-live-cwd/' + encodeURIComponent(cwd) + '?agent=' + encodeURIComponent(agent);
     });
   });
 }

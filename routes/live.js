@@ -74,13 +74,18 @@ function findLiveEntryBySessionId(list, sessionId) {
   return null;
 }
 
-function findLiveEntryByCwd(list, cwd) {
+function findLiveEntryByCwd(list, cwd, agent) {
   if (!Array.isArray(list) || !cwd) return null;
   // list is sorted lastActivityTs desc — first match is the most recent.
+  // When an agent hint is supplied (claude/codex/hermes share a cwd), prefer
+  // an entry that matches it; fall back to the first cwd match otherwise.
+  let fallback = null;
   for (const entry of list) {
-    if (entry && entry.cwd === cwd) return entry;
+    if (!entry || entry.cwd !== cwd) continue;
+    if (agent && entry.agent === agent) return entry;
+    if (!fallback) fallback = entry;
   }
-  return null;
+  return fallback;
 }
 
 function encodeCwd(cwd) {
@@ -409,7 +414,7 @@ function attachWS(server) {
         if (e) return e;
       }
       if (attachedCwd) {
-        return findLiveEntryByCwd(live, attachedCwd);
+        return findLiveEntryByCwd(live, attachedCwd, attachedAgent);
       }
       return null;
     }
@@ -521,7 +526,7 @@ function attachWS(server) {
         if (!attachedSid && attachedCwd) {
           try {
             const live = await liveSessionScanner.scanLive();
-            const e = findLiveEntryByCwd(live, attachedCwd);
+            const e = findLiveEntryByCwd(live, attachedCwd, attachedAgent);
             if (e) {
               lastMeta = buildMeta(e, null);
               if (e.sessionId) {
@@ -673,7 +678,12 @@ function attachWS(server) {
         }
         const sidArg = (typeof msg.sessionId === 'string') ? msg.sessionId : null;
         const cwdArg = (typeof msg.cwd === 'string') ? msg.cwd : null;
-        console.log('[live] hello sid=%s cwd=%s', sidArg || '(none)', cwdArg || '(none)');
+        const agentArg = (typeof msg.agent === 'string' &&
+                          (msg.agent === 'claude' || msg.agent === 'codex' || msg.agent === 'hermes'))
+          ? msg.agent
+          : null;
+        console.log('[live] hello sid=%s cwd=%s agent=%s',
+          sidArg || '(none)', cwdArg || '(none)', agentArg || '(none)');
         if (sidArg && !SESSION_ID_RE.test(sidArg)) {
           closeWithError('invalid sessionId');
           return;
@@ -691,10 +701,13 @@ function attachWS(server) {
           return;
         }
 
-        // Locate the running entry (claude or codex) by sid OR cwd.
+        // Locate the running entry (claude or codex) by sid OR cwd. When a
+        // cwd is shared between agents (e.g. claude + codex in the same
+        // project) and the row was sid-less, the agent hint from the URL
+        // query disambiguates which entry to attach to.
         const entry = sidArg
           ? findLiveEntryBySessionId(live, sidArg)
-          : findLiveEntryByCwd(live, cwdArg);
+          : findLiveEntryByCwd(live, cwdArg, agentArg);
 
         // Resolve final identifiers.
         const resolvedSid = sidArg || (entry && entry.sessionId) || null;
@@ -702,7 +715,10 @@ function attachWS(server) {
 
         // Determine agent. When the live entry is found, trust its tag.
         // Otherwise (sid-only, no live process), probe both jsonl trees.
-        let agent = (entry && entry.agent) || 'claude';
+        // When no entry is available, honor the URL agent hint so cwd-only
+        // hellos for a vanished codex/hermes process don't silently coerce
+        // to 'claude'.
+        let agent = (entry && entry.agent) || agentArg || 'claude';
         let jsonlPath = null;
         if (entry && entry.jsonlPath) {
           jsonlPath = entry.jsonlPath;
