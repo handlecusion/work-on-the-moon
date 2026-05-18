@@ -28,3 +28,6 @@ build/
 /.wotm-uploads/
 /iphone14pro-*.png
 /my-offices-default.png
+
+# uipro skill (installed locally, not committed)
+/.claude/skills/
