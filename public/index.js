@@ -61,6 +61,7 @@ function basenameOfCwd(cwd) {
 function renderSessionList(container, items, opts) {
   opts = opts || {};
   const activeName = opts.activeName || null;
+  const dismissible = !!opts.dismissible;
 
   if (!items.length) {
     container.innerHTML = '';
@@ -98,11 +99,40 @@ function renderSessionList(container, items, opts) {
         (time
           ? '<time class="session-row-time" datetime="' + escapeHtml(it.lastUsedAt || '') + '">' + escapeHtml(time) + '</time>'
           : '') +
+        (dismissible
+          ? '<button class="session-row-dismiss" type="button" aria-label="대화 기록 삭제" title="대화 기록 삭제">×</button>'
+          : '') +
       '</a>'
     );
   }
 
   container.innerHTML = html.join('');
+
+  if (dismissible) {
+    container.querySelectorAll('a.session-row').forEach((a) => {
+      const btn = a.querySelector('.session-row-dismiss');
+      if (!btn) return;
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const name = a.getAttribute('data-name') || '';
+        const ag   = a.getAttribute('data-agent') || 'claude';
+        if (!name) return;
+        if (!confirm('"' + name + '" (' + ag + ') 대화 기록을 삭제할까요?\n(서버 세션도 함께 초기화됩니다.)')) return;
+        try {
+          const r = await fetch(
+            '/api/sessions/' + encodeURIComponent(name) + '/' + encodeURIComponent(ag) + '?clear=1',
+            { method: 'DELETE', credentials: 'same-origin' }
+          );
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          lastPayloadJson = null; // force re-render
+          load({ silent: true });
+        } catch (err) {
+          showHomeToast('삭제 실패: ' + (err && err.message || err), () => load());
+        }
+      });
+    });
+  }
 }
 
 // ─── Local (live) row renderer ───────────────────────────────────────────────
@@ -351,7 +381,7 @@ async function load(opts) {
     if (recent.length === 0) {
       recentList.innerHTML = '<div class="session-section-empty">최근 대화 없음</div>';
     } else {
-      renderSessionList(recentList, recent, { mode: 'home' });
+      renderSessionList(recentList, recent, { mode: 'home', dismissible: true });
     }
 
     // Local

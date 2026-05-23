@@ -3030,6 +3030,36 @@ pre:focus-within .code-copy-btn {
   align-self: center;
 }
 
+/* Dismiss (X) — only on recent rows */
+.session-row-dismiss {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.session-row-dismiss:hover {
+  opacity: 1;
+  background: var(--bg-elev-3, var(--bg-elev-2));
+  color: var(--danger, #e85c5c);
+}
+.session-row-dismiss:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 /* Home toast (errors) */
 .home-toast {
   margin: 12px 16px 0;

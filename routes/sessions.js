@@ -113,4 +113,47 @@ router.get('/api/sessions', session.requireAuth, async (req, res) => {
   res.json({ managed: items, localActive });
 });
 
+const VALID_AGENTS = new Set(['claude', 'codex', 'hermes']);
+
+// DELETE /api/sessions/:name/:agent
+//   ?clear=1 — also wipe sessionId + messageLog (destructive, like newChat)
+//   default  — only kill in-memory runner entry, preserve persisted state
+router.delete('/api/sessions/:name/:agent', session.requireAuth, async (req, res) => {
+  const { name, agent } = req.params;
+  if (!NAME_RE.test(name) || name.startsWith('.')) {
+    return res.status(400).json({ error: 'invalid project name' });
+  }
+  if (!VALID_AGENTS.has(agent)) {
+    return res.status(400).json({ error: 'invalid agent' });
+  }
+  const clear = String(req.query.clear || '') === '1';
+
+  const chat = getChatModule();
+  const rkey = name + '::' + agent;
+  const entry = chat.runners.get(rkey);
+  if (entry) {
+    if (entry.abortController) {
+      try { entry.abortController.abort(); } catch (_) {}
+    }
+    entry.abortController = null;
+    entry.busy = false;
+    for (const c of entry.clients) {
+      if (c.readyState === c.OPEN) {
+        try { c.send(JSON.stringify({ type: 'closed', reason: 'session reset by API' })); } catch (_) {}
+      }
+    }
+    chat.runners.delete(rkey);
+  }
+
+  if (clear) {
+    try {
+      await projectStore.clearSession(name, agent);
+    } catch (e) {
+      return res.status(500).json({ error: 'clearSession failed: ' + e.message });
+    }
+  }
+
+  res.json({ ok: true, cleared: clear });
+});
+
 module.exports = router;

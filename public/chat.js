@@ -70,6 +70,7 @@ const menuBtn         = $('menuBtn');
 const chatPopover     = $('chatPopover');
 const popoverBackdrop = $('popoverBackdrop');
 const newChatBtn      = $('newChatBtn');
+const endSessionBtn   = $('endSessionBtn');
 const logoutBtn       = $('logoutBtn');
 const terminalLink    = $('terminalLink');
 const scrollBtn       = $('scrollBtn');
@@ -1465,8 +1466,32 @@ let isComposing = false;
 chatTextarea.addEventListener('compositionstart', () => { isComposing = true; });
 chatTextarea.addEventListener('compositionend',   () => { isComposing = false; });
 
+function endSession(opts) {
+  opts = opts || {};
+  const force = !!opts.force;
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    try {
+      state.ws.send(JSON.stringify({ type: force ? 'forceReset' : 'endSession' }));
+    } catch (_) {}
+  }
+  // Give the server a brief moment to ack, then close + navigate.
+  setTimeout(() => {
+    try { if (state.ws) state.ws.close(); } catch (_) {}
+    location.href = '/';
+  }, 150);
+}
+
 function sendMessage() {
   const text = chatTextarea.value;
+  const trimmed = text.trim();
+  // Slash exits — intercept before busy/WS checks so /quit works even when
+  // the runner is stuck busy.
+  if (trimmed === '/quit' || trimmed === '/exit') {
+    chatTextarea.value = '';
+    closeSlashPicker();
+    endSession({ force: state.busy });
+    return;
+  }
   const ready = state.attach.pending.filter((a) => a.status === 'ready');
   const anyUploading = state.attach.pending.some((a) => a.status === 'uploading');
   if (anyUploading) return;
@@ -1911,6 +1936,18 @@ newChatBtn.addEventListener('click', () => {
     state.ws.send(JSON.stringify({ type: 'newChat' }));
   }
 });
+
+if (endSessionBtn) {
+  endSessionBtn.addEventListener('click', () => {
+    closePopover();
+    const force = state.busy;
+    const msg = force
+      ? '응답 중인 세션을 강제 종료하고 홈으로 나갑니다.\n(대화 기록은 보존됩니다.)'
+      : '대화창을 나갑니다. 대화 기록은 보존됩니다.';
+    if (!confirm(msg)) return;
+    endSession({ force });
+  });
+}
 
 // ─── Agent toggle (popover segmented control) ─────────────────────────────────
 (function wireAgentToggle() {

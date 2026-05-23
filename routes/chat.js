@@ -584,6 +584,40 @@ function attachWS(server) {
       }
 
       // ----------------------------------------------------------------
+      // endSession / forceReset — abort runner, release busy, clear sessionId
+      // and messageLog so the row leaves "최근 대화" and the project becomes
+      // openable again from "모든 프로젝트".
+      // ----------------------------------------------------------------
+      if (type === 'endSession' || type === 'forceReset') {
+        const projectName = attachedProject;
+        const agent = attachedAgent;
+        const rkey = runnerKey(projectName, agent);
+        const cur = runners.get(rkey);
+        if (cur) {
+          if (cur.abortController) {
+            try { cur.abortController.abort(); } catch (_) {}
+          }
+          cur.abortController = null;
+          cur.busy = false;
+          broadcast(cur, { type: 'state', busy: false, agent });
+          broadcast(cur, { type: 'history', agent, sessionId: null, messages: [], busy: false });
+          for (const c of cur.clients) {
+            if (c !== ws && c.readyState === c.OPEN) {
+              try { c.send(JSON.stringify({ type: 'closed', reason: 'session ended by user' })); } catch (_) {}
+            }
+          }
+          runners.delete(rkey);
+        }
+        projectStore.clearSession(projectName, agent).then(() => {
+          broadcastAll({ type: 'event', kind: 'sessions_changed', name: projectName, agent, busy: false });
+        }).catch((e) => {
+          console.error('[chat] endSession clearSession error:', e);
+        });
+        send({ type: 'closed', reason: 'session ended' });
+        return;
+      }
+
+      // ----------------------------------------------------------------
       // authStatus — respond to requester only
       // ----------------------------------------------------------------
       if (type === 'authStatus') {
