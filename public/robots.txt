@@ -1,0 +1,140 @@
+# work-on-the-moon — robots policy
+#
+# This server hosts a single-user passkey-protected web UI plus a public
+# marketing landing page. Only the landing page and its public assets are
+# indexable. Authenticated app routes are blocked from crawling.
+
+User-agent: *
+Allow: /landing
+Allow: /llms.txt
+Allow: /sitemap.xml
+Allow: /static/landing.css
+Allow: /static/apple-touch-icon.png
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+Disallow: /setup
+Disallow: /devices
+Disallow: /login
+
+# AI crawlers — explicitly allow on the marketing surface
+User-agent: GPTBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: OAI-SearchBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: ChatGPT-User
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: ClaudeBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Claude-Web
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: anthropic-ai
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Perplexity-User
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Google-Extended
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: GoogleOther
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Applebot-Extended
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Bytespider
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: CCBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: cohere-ai
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: meta-externalagent
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: Amazonbot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+User-agent: DuckAssistBot
+Allow: /landing
+Allow: /llms.txt
+Disallow: /chat/
+Disallow: /chat-live/
+Disallow: /api/
+
+Sitemap: /sitemap.xml

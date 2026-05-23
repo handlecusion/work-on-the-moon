@@ -106,6 +106,24 @@ function buildApp() {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
   });
 
+  // Public marketing surface — indexable, no auth.
+  app.get('/landing', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+  });
+  app.get('/llms.txt', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.type('text/plain').sendFile(path.join(__dirname, 'public', 'llms.txt'));
+  });
+  app.get('/robots.txt', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.type('text/plain').sendFile(path.join(__dirname, 'public', 'robots.txt'));
+  });
+  app.get('/sitemap.xml', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.type('application/xml').sendFile(path.join(__dirname, 'public', 'sitemap.xml'));
+  });
+
   app.use('/api/auth', authRouter);
   app.use(setupRouter); // /setup + /api/setup/*
   app.use(devicesRouter); // /devices + /api/devices/*

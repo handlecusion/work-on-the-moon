@@ -1,6 +1,7 @@
 # work-on-the-moon (`wotm`)
 
 **Languages:** [English](README.md) · [한국어](README-ko.md)
+**Demo / landing:** <https://work.handlecusion.com/landing>
 
 > Web launcher + live mirror for Claude Code sessions on **your own** machine.
 > First-class support for **cmux-claude**: attach to your terminal/cmux Claude

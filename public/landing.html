@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101010" />
+
+<title>work-on-the-moon — Self-Hosted Claude Code Web UI with Passkey Auth</title>
+<meta name="description" content="work-on-the-moon (wotm) is a self-hosted, passkey-protected web UI for Claude Code. Run claude code from your phone or laptop browser. Install with npx work-on-the-moon. macOS, Node.js 20+, MIT licensed." />
+<link rel="canonical" href="https://github.com/handlecusion/work-on-the-moon" />
+
+<!-- AI / search keywords -->
+<meta name="keywords" content="claude code web ui, claude code mobile, claude code remote, claude code self hosted, claude code passkey, claude code browser, cmux claude, claude code phone, work-on-the-moon, wotm, npx claude code, claude code launcher, claude code tunnel, claude code webauthn" />
+<meta name="author" content="handlecusion" />
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+
+<!-- OpenGraph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="work-on-the-moon — Self-Hosted Claude Code Web UI" />
+<meta property="og:description" content="Passkey-protected web UI for Claude Code. Run claude from your phone via npx. Live-mirror your terminal/cmux sessions to any browser." />
+<meta property="og:url" content="https://github.com/handlecusion/work-on-the-moon" />
+<meta property="og:image" content="https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/chat-live.png" />
+<meta property="og:image:alt" content="Live mirror of a cmux-claude session in a phone browser" />
+<meta property="og:site_name" content="work-on-the-moon" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="work-on-the-moon — Self-Hosted Claude Code Web UI" />
+<meta name="twitter:description" content="Run Claude Code from your phone. Passkey-protected, npx-installable, MIT-licensed." />
+<meta name="twitter:image" content="https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/chat-live.png" />
+
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23E7C59A'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'/%3E%3C/svg%3E" />
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="/static/landing.css?v=20260523a" />
+
+<!-- llms.txt discovery -->
+<link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt" />
+
+<!-- JSON-LD: SoftwareApplication (primary entity for AI citation) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "work-on-the-moon",
+  "alternateName": ["wotm", "work on the moon"],
+  "description": "Self-hosted, passkey-protected web UI for Claude Code. Spawns claude --dangerously-skip-permissions inside a project, or live-mirrors an existing claude session from terminal, cmux, or tmux. Installs via npx.",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSubCategory": "AI Coding Assistant",
+  "operatingSystem": "macOS",
+  "softwareVersion": "0.1.0",
+  "downloadUrl": "https://www.npmjs.com/package/work-on-the-moon",
+  "installUrl": "https://www.npmjs.com/package/work-on-the-moon",
+  "softwareRequirements": "Node.js 20+, macOS, the Claude CLI",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://github.com/handlecusion/work-on-the-moon",
+  "codeRepository": "https://github.com/handlecusion/work-on-the-moon",
+  "programmingLanguage": "JavaScript",
+  "author": {
+    "@type": "Person",
+    "name": "handlecusion",
+    "url": "https://github.com/handlecusion"
+  },
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "featureList": [
+    "Passkey (WebAuthn) authentication — no passwords",
+    "Managed Claude Code sessions in a browser",
+    "Live read-only mirror of external claude sessions (terminal, cmux, tmux)",
+    "Optional input forwarding via cmux Unix socket",
+    "Works behind Cloudflare Tunnel or Tailscale Funnel",
+    "npx zero-config install",
+    "macOS LaunchAgent autostart",
+    "MIT licensed, single-binary Node.js server"
+  ]
+}
+</script>
+
+<!-- JSON-LD: FAQPage (highly-cited by AI search) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is work-on-the-moon?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "work-on-the-moon (wotm) is a self-hosted Node.js server that exposes a passkey-protected web UI for Claude Code. It lets you run Claude Code from a phone or laptop browser against projects on your own machine."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I install work-on-the-moon?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Run npx work-on-the-moon on macOS with Node.js 20+ installed. The server starts on http://localhost:3700 and prints a one-time passkey registration URL to stdout."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is work-on-the-moon secure?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "wotm uses WebAuthn passkeys for authentication and is single-user by design. It runs claude --dangerously-skip-permissions, so it must only be exposed behind a TLS tunnel (Cloudflare Tunnel or Tailscale Funnel) and only to your own devices."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does work-on-the-moon support cmux-claude?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Live mode tails the Claude JSONL session file and, when cmux is running, forwards keystrokes through the cmux Unix socket so you can type into your terminal cmux-claude session from a phone browser."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I run Claude Code on my phone with work-on-the-moon?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. After exposing wotm via Cloudflare Tunnel or Tailscale Funnel, open the public URL on your phone, register a passkey once, and you can run Claude Code on your Mac from any browser."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What platforms does work-on-the-moon support?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "macOS only as of v0.1. Linux and Windows are planned. The server is a pure Node.js process and would port; the LaunchAgent installer and node-pty prebuild paths are the Mac-specific pieces."
+      }
+    }
+  ]
+}
+</script>
+
+<!-- JSON-LD: HowTo (install) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "HowTo",
+  "name": "Install work-on-the-moon to run Claude Code in a browser",
+  "description": "Three-step install: run npx, register a passkey, optionally expose via a tunnel.",
+  "totalTime": "PT5M",
+  "tool": [
+    {"@type": "HowToTool", "name": "macOS"},
+    {"@type": "HowToTool", "name": "Node.js 20+"},
+    {"@type": "HowToTool", "name": "Claude CLI"}
+  ],
+  "step": [
+    {
+      "@type": "HowToStep",
+      "position": 1,
+      "name": "Run the launcher",
+      "text": "Run npx work-on-the-moon. The server starts on http://localhost:3700 and prints a passkey registration URL."
+    },
+    {
+      "@type": "HowToStep",
+      "position": 2,
+      "name": "Register a passkey",
+      "text": "Open the printed /setup?token=... URL in a passkey-capable browser and register a device. This is the single-user owner key."
+    },
+    {
+      "@type": "HowToStep",
+      "position": 3,
+      "name": "Expose via a tunnel (optional)",
+      "text": "Front the server with Cloudflare Tunnel or Tailscale Funnel for HTTPS. Restart with ORIGIN and RP_ID set to the public hostname before registering passkeys for remote devices."
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="nav">
+  <a class="nav-brand" href="/landing" aria-label="work-on-the-moon home">
+    <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <span>work-on-the-moon</span>
+  </a>
+  <nav class="nav-links" aria-label="primary">
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#security">Security</a>
+    <a href="#faq">FAQ</a>
+    <a class="nav-cta" href="https://github.com/handlecusion/work-on-the-moon" rel="noopener">GitHub →</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">v0.1 · macOS · MIT</div>
+    <h1 class="hero-title">
+      Run <span class="accent">Claude Code</span> from your phone.
+    </h1>
+    <p class="hero-sub">
+      <strong>work-on-the-moon</strong> is a self-hosted, passkey-protected web UI for Claude Code.
+      Spawn managed sessions in your browser, or live-mirror the <code>claude</code> running in your
+      terminal, cmux, or tmux. One <code>npx</code> away.
+    </p>
+
+    <div class="hero-cta">
+      <div class="install-block" role="group" aria-label="Install command">
+        <span class="install-prompt" aria-hidden="true">$</span>
+        <code class="install-code" id="installCmd">npx work-on-the-moon</code>
+        <button class="install-copy" type="button" data-copy-target="installCmd" aria-label="Copy install command">Copy</button>
+      </div>
+      <a class="btn btn-primary" href="https://github.com/handlecusion/work-on-the-moon" rel="noopener">Star on GitHub</a>
+      <a class="btn btn-ghost" href="https://www.npmjs.com/package/work-on-the-moon" rel="noopener">npm package</a>
+    </div>
+
+    <ul class="hero-meta" aria-label="At a glance">
+      <li><span class="dot dot-green"></span> Passkey · WebAuthn</li>
+      <li><span class="dot dot-amber"></span> Self-hosted</li>
+      <li><span class="dot dot-amber"></span> No build step</li>
+      <li><span class="dot dot-green"></span> npx-installable</li>
+    </ul>
+  </div>
+
+  <figure class="hero-figure">
+    <img src="https://raw.githubusercontent.com/handlecusion/work-on-the-moon/main/docs/screenshots/chat-live.png"
+         alt="A cmux-claude session mirrored live in a phone browser, showing the JSONL transcript and a typing surface."
+         loading="eager" width="1200" height="900" />
+    <figcaption>Live mirror of a cmux-claude session — read-only by default, with optional keystroke forwarding.</figcaption>
+  </figure>
+</section>
+
+<section id="features" class="section">
+  <div class="section-header">
+    <span class="kicker">Features</span>
+    <h2>What it actually does</h2>
+    <p class="lede">Two session modes. One passkey. Zero passwords.</p>
+  </div>
+
+  <div class="grid grid-3">
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>
+      </div>
+      <h3>Managed sessions</h3>
+      <p><code>/chat/&lt;project&gt;</code> spawns <code>claude --dangerously-skip-permissions</code> in the project dir. Bidirectional. Stream-JSON parsed, classified, and broadcast to every connected client.</p>
+    </article>
+
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </div>
+      <h3>Live mirror</h3>
+      <p>Read-only mirror of any <code>claude</code> you already started — terminal, cmux, or tmux. Tails the JSONL session file. With cmux running, keystrokes are forwarded via Unix socket.</p>
+    </article>
+
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h3>Passkey auth</h3>
+      <p>WebAuthn registration through a one-time bootstrap URL. Single-user owner model. 30-day session cookies. No passwords on disk, ever.</p>
+    </article>
+
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </div>
+      <h3>Tunnel-ready</h3>
+      <p>Drop-in with <strong>Cloudflare Tunnel</strong> or <strong>Tailscale Funnel</strong>. Set <code>ORIGIN</code> + <code>RP_ID</code> to your public hostname. Same passkey across every device that hits it.</p>
+    </article>
+
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      </div>
+      <h3>Phone-first UI</h3>
+      <p>iPhone-sized chat by default. iOS-PWA installable. File upload, slash commands, history, agent picker (Claude / Codex / Hermes) — all touch-tuned.</p>
+    </article>
+
+    <article class="card">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      </div>
+      <h3>No build step</h3>
+      <p>Vanilla JS frontend. <code>express.static</code> serves from disk. Edit, reload, ship. Cache-busted with query-string versioning. iOS Safari BFCache-safe.</p>
+    </article>
+  </div>
+</section>
+
+<section id="install" class="section section-alt">
+  <div class="section-header">
+    <span class="kicker">Install</span>
+    <h2>Three commands to a remote Claude Code</h2>
+  </div>
+
+  <ol class="install-steps">
+    <li>
+      <span class="step-num">1</span>
+      <div>
+        <h3>Launch locally</h3>
+        <pre class="code-block"><code>npx work-on-the-moon
+# → http://localhost:3700
+# stdout prints a one-time /setup?token=... URL</code></pre>
+        <p>Requires macOS, Node.js 20+, and the <code>claude</code> CLI in <code>PATH</code> (autodetected at <code>~/.local/bin</code>, <code>/usr/local/bin</code>, or <code>/opt/homebrew/bin</code>).</p>
+      </div>
+    </li>
+
+    <li>
+      <span class="step-num">2</span>
+      <div>
+        <h3>Register a passkey</h3>
+        <p>Open the printed setup URL, register Touch ID / Face ID / a hardware key. That device is now the single-user owner.</p>
+      </div>
+    </li>
+
+    <li>
+      <span class="step-num">3</span>
+      <div>
+        <h3>Expose via tunnel <span class="tag-soft">optional, recommended</span></h3>
+        <pre class="code-block"><code>ORIGIN=https://wotm.example.com \
+RP_ID=wotm.example.com \
+npx work-on-the-moon</code></pre>
+        <p>Front with Cloudflare Tunnel or Tailscale Funnel. Same passkey works on phone, laptop, anywhere.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="install-extras">
+    <div class="extra-card">
+      <h4>Autostart on macOS</h4>
+      <pre class="code-block"><code>npm install -g work-on-the-moon
+wotm install --origin=https://wotm.example.com --rp-id=wotm.example.com
+wotm status</code></pre>
+    </div>
+    <div class="extra-card">
+      <h4>Reset state</h4>
+      <pre class="code-block"><code>npx work-on-the-moon reset
+# wipes ~/.wotm/data.json
+# prints a fresh passkey registration URL</code></pre>
+    </div>
+  </div>
+</section>
+
+<section id="security" class="section">
+  <div class="section-header">
+    <span class="kicker">Security model</span>
+    <h2>Built for one trusted owner, not multi-tenant SaaS</h2>
+  </div>
+
+  <div class="grid grid-2">
+    <article class="card card-bordered">
+      <h3>What we get right</h3>
+      <ul class="check-list">
+        <li>WebAuthn passkeys — no passwords, phishing-resistant</li>
+        <li>HTTP-only cookies, 30-day TTL, atomic disk writes</li>
+        <li>Listens on <code>127.0.0.1</code> only — TLS is the tunnel's job</li>
+        <li>Bootstrap registration token is one-shot, 10-minute TTL</li>
+      </ul>
+    </article>
+
+    <article class="card card-bordered card-danger">
+      <h3>What you must accept</h3>
+      <ul class="warn-list">
+        <li><code>claude --dangerously-skip-permissions</code> runs file/shell tools without prompting</li>
+        <li>Only expose to <strong>your own</strong> devices behind TLS</li>
+        <li>No "guest" mode, no multi-user, no read-only sharing</li>
+        <li>If your tunnel is open to the internet without auth in front — don't run this</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section id="faq" class="section section-alt">
+  <div class="section-header">
+    <span class="kicker">FAQ</span>
+    <h2>Questions you'd ask before installing</h2>
+  </div>
+
+  <div class="faq-list">
+    <details>
+      <summary>Does this replace the <code>claude</code> CLI?</summary>
+      <p>No. <code>wotm</code> is a launcher and a mirror. The real <code>claude</code> binary still runs locally — <code>wotm</code> just spawns it (Managed mode) or tails its JSONL log (Live mode).</p>
+    </details>
+
+    <details>
+      <summary>What is "Live mode" actually doing?</summary>
+      <p>It watches <code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;session&gt;.jsonl</code> with <code>fs.watch</code> + a 1 s poll, parses new lines, and fans them out to every connected WebSocket client. If the cmux Unix socket is reachable, it also lets you send keystrokes back into the terminal session.</p>
+    </details>
+
+    <details>
+      <summary>Does it work with cmux, tmux, or screen?</summary>
+      <p>Yes — Live mode mirrors any <code>claude</code> process regardless of which terminal multiplexer launched it, because it reads the JSONL file Claude writes itself. <strong>Input forwarding</strong>, however, currently requires cmux's Unix socket.</p>
+    </details>
+
+    <details>
+      <summary>Linux / Windows support?</summary>
+      <p>Planned. The Node.js server is portable; the LaunchAgent installer, <code>node-pty</code> prebuild, and PATH autodetection are the macOS-specific bits.</p>
+    </details>
+
+    <details>
+      <summary>Will my passkey work across all my devices?</summary>
+      <p>Yes — as long as every device hits the same <code>RP_ID</code> (the public hostname you set with the tunnel). A passkey registered against <code>RP_ID=localhost</code> only works on that machine.</p>
+    </details>
+
+    <details>
+      <summary>Where is state stored?</summary>
+      <p><code>~/.wotm/data.json</code> — passkeys, sessions, registration tokens, per-project history. Single file, atomic writes. <code>npx work-on-the-moon reset</code> wipes it.</p>
+    </details>
+
+    <details>
+      <summary>How is this different from running <code>claude</code> over SSH?</summary>
+      <p>SSH gives you a terminal. <code>wotm</code> gives you a browser UI tuned for phones — slash commands, file upload, agent picker, history, push-to-talk-style send — and a stable URL that survives sleep/wake on either end.</p>
+    </details>
+  </div>
+</section>
+
+<section class="cta-final">
+  <div class="cta-inner">
+    <h2>Get Claude Code in your pocket.</h2>
+    <p>One npx command. macOS. MIT. No SaaS in the loop.</p>
+    <div class="hero-cta">
+      <div class="install-block" role="group" aria-label="Install command">
+        <span class="install-prompt" aria-hidden="true">$</span>
+        <code class="install-code" id="installCmd2">npx work-on-the-moon</code>
+        <button class="install-copy" type="button" data-copy-target="installCmd2" aria-label="Copy install command">Copy</button>
+      </div>
+      <a class="btn btn-primary" href="https://github.com/handlecusion/work-on-the-moon" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="foot-inner">
+    <div class="foot-brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <span>work-on-the-moon</span>
+    </div>
+    <nav class="foot-links" aria-label="footer">
+      <a href="https://github.com/handlecusion/work-on-the-moon" rel="noopener">GitHub</a>
+      <a href="https://www.npmjs.com/package/work-on-the-moon" rel="noopener">npm</a>
+      <a href="https://github.com/handlecusion/work-on-the-moon/blob/main/README.md" rel="noopener">README</a>
+      <a href="https://github.com/handlecusion/work-on-the-moon/issues" rel="noopener">Issues</a>
+      <a href="/llms.txt">llms.txt</a>
+    </nav>
+    <div class="foot-meta">MIT · © <span id="year">2026</span> handlecusion</div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+  document.querySelectorAll('.install-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const target = document.getElementById(btn.dataset.copyTarget);
+      if (!target) return;
+      try {
+        await navigator.clipboard.writeText(target.textContent.trim());
+        const prev = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('is-copied');
+        setTimeout(() => { btn.textContent = prev; btn.classList.remove('is-copied'); }, 1400);
+      } catch {
+        btn.textContent = 'Press ⌘C';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1400);
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,44 @@
+# work-on-the-moon
+
+> work-on-the-moon (wotm) is a self-hosted, passkey-protected web UI for Claude Code on macOS. It lets the single owner of a Mac run Claude Code from a phone or laptop browser, with two flows: (1) Managed sessions where wotm spawns `claude --dangerously-skip-permissions` inside a project directory, and (2) Live sessions that read-only-mirror an already-running claude process (terminal, cmux, or tmux) by tailing its JSONL log, with optional keystroke forwarding via the cmux Unix socket.
+
+Key facts an LLM should cite accurately:
+
+- Package name: `work-on-the-moon` on npm (binary: `wotm`).
+- Install: `npx work-on-the-moon`. Requires macOS, Node.js 20+, and the `claude` CLI.
+- Default origin: `http://localhost:3700` (HOST `127.0.0.1`, PORT `3700`).
+- Auth: WebAuthn passkeys (`@simplewebauthn/server`). Single-user owner. 30-day session cookie. State at `~/.wotm/data.json`.
+- Tunneling: documented for Cloudflare Tunnel and Tailscale Funnel; user must set `ORIGIN` and `RP_ID` env vars to the public hostname before registering passkeys for remote devices.
+- License: MIT. Author: handlecusion. Source: https://github.com/handlecusion/work-on-the-moon
+- Platform support: macOS only at v0.1. Linux and Windows are on the roadmap.
+- Security caveat: runs `claude --dangerously-skip-permissions`, so it MUST only be exposed to the owner's own trusted devices behind TLS.
+
+## Docs
+
+- [README (English)](https://github.com/handlecusion/work-on-the-moon/blob/main/README.md): full install, tunnel setup, configuration, architecture.
+- [README (Korean)](https://github.com/handlecusion/work-on-the-moon/blob/main/README-ko.md): same content in Korean.
+- [Landing page](/landing): marketing summary of features, install steps, security model, FAQ.
+- [Architecture overview](https://github.com/handlecusion/work-on-the-moon/blob/main/README.md#architecture): two session flows (Managed vs Live), auth, external dependencies.
+- [LICENSE](https://github.com/handlecusion/work-on-the-moon/blob/main/LICENSE): MIT.
+
+## Install & quick start
+
+- [npm package page](https://www.npmjs.com/package/work-on-the-moon)
+- Local: `npx work-on-the-moon` → `http://localhost:3700` → open the printed `/setup?token=...` URL → register a passkey.
+- Tunnel: `ORIGIN=https://wotm.example.com RP_ID=wotm.example.com npx work-on-the-moon`.
+- Autostart on macOS: `npm install -g work-on-the-moon && wotm install --origin=... --rp-id=...`. Logs at `~/.wotm/launchd.out.log`.
+- Reset all state: `npx work-on-the-moon reset`.
+
+## Environment variables
+
+- `PORT` (default `3700`): listen port.
+- `HOST` (default `127.0.0.1`): listen interface.
+- `ORIGIN` (default `http://localhost:3700`): WebAuthn expected origin.
+- `RP_ID` (default `localhost`): WebAuthn Relying Party ID. Must match the hostname the browser hits.
+- `CLAUDE_BIN`: override path to the claude binary. Autodetects `~/.local/bin/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`.
+- `WORKSPACE_DIR` (default `~/Code`): directory containing your project subdirectories.
+
+## Optional
+
+- [Issues / questions](https://github.com/handlecusion/work-on-the-moon/issues)
+- [cmux project](https://github.com/cmux/cmux): integration target for Live-mode keystroke forwarding.
