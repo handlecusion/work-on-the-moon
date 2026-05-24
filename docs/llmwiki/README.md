@@ -12,14 +12,16 @@ Before non-trivial edits, read:
 
 1. `CLAUDE.md`
 2. `docs/llmwiki/README.md`
-3. relevant `docs/llmwiki/ard/*.md`
-4. relevant `docs/llmwiki/failures/*.md`
-5. existing `.omc/wiki/index.md` and relevant `.omc/wiki/*.md` pages when deeper architecture context is needed
+3. `docs/llmwiki/review-context-contract.md` for review-sensitive work
+4. relevant `docs/llmwiki/ard/*.md`
+5. relevant `docs/llmwiki/failures/*.md`
+6. existing `.omc/wiki/index.md` and relevant `.omc/wiki/*.md` pages when deeper architecture context is needed
 
 ## Directory Roles
 
 - `ard/`: architectural record decisions that agents must respect.
 - `failures/`: structured failure records with retrieval keys so agents do not repeat known-bad approaches.
+- `review-context-contract.md`: required context bundle for review agents.
 - `review-cases/`: code review examples used to test the harness.
 - `golden-set/`: ideal review outputs for evaluating precision, recall, severity match, and duplicate rate.
 
