@@ -61,3 +61,12 @@ Result:
 - added accepted finding: latest same-session `onboard_project` evidence should win in `resolveActiveSessionCwds`.
 - verification passed: `npm test`, `node --check lib/hermesDb.js`, `node --check lib/hermesSessionScanner.js`, `git diff --check`, and a local `scanHermes()` smoke.
 - remaining verification gap: live smoke had one active Hermes session, so it did not exercise simultaneous WOTM/other-project collision.
+
+## Follow-Up Resolution
+
+Resolved on 2026-05-24.
+
+- `resolveActiveSessionCwds` now selects timestamp/id for onboard rows and uses newest-first ordering within the same active-session depth.
+- The resolver also sorts rows in JS before assigning the first cwd per active session, preserving nearest parent-session inheritance while making same-depth selection deterministic.
+- Regression coverage now includes multiple onboard calls in one active session, same-timestamp message-id tiebreaking, and parent-depth precedence.
+- The resolution verification passed unit, syntax, and whitespace checks; the local `scanHermes()` smoke returned zero active Hermes sessions at resolution time.

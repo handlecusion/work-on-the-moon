@@ -120,3 +120,13 @@ Positive checks:
 - This is the preferred first productization dry-run target because the bug came from real cross-project session confusion and the review needs both graph context and project-local invariants.
 - Add a follow-up code fix or explicit acceptance decision for latest-onboard selection inside `resolveActiveSessionCwds`.
 - The dry-run confirmed that project-local docs plus graph evidence can suppress wrong suggestions while still surfacing a new review-quality finding.
+
+## Follow-Up Resolution
+
+Resolution date: 2026-05-24
+
+- Implemented newest-first same-depth cwd selection in `resolveActiveSessionCwds` by selecting message timestamp/id and ordering candidate rows by active session, depth, timestamp descending, and message id descending.
+- Added a JS-side deterministic sort before map construction so resolver behavior remains stable even if query output ordering changes.
+- Added regression tests for newest same-depth cwd selection, same-timestamp message-id tiebreaking, and nearest parent-session inheritance.
+- Verification passed: `npm test`, `node --check lib/hermesDb.js`, `node --check lib/hermesSessionScanner.js`, `node --check test/hermes-session-matching.test.js`, and `git diff --check`.
+- Local `scanHermes()` smoke completed without crashing, but observed zero active Hermes sessions at resolution time, so the two-project live collision smoke remains a future optional field check.
