@@ -924,7 +924,25 @@ function attachWS(server) {
           }
         }
 
-        // Routing priority: cmux > tmux > error.
+        // Routing priority: exact tmux pane > cmux surface > error. A tmux
+        // match is bound to this process's TTY, while cmux can be inferred by
+        // cwd and may point at a sibling session in the same project.
+        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
+          try {
+            if (type === 'send') {
+              await tmuxClient.sendText(tmuxState.socketPath, tmuxState.paneId, msg.text);
+              console.log('[live] tmux sendText OK pane=%s bytes=%d', tmuxState.paneId, Buffer.byteLength(msg.text, 'utf8'));
+            } else {
+              await tmuxClient.sendKey(tmuxState.socketPath, tmuxState.paneId, msg.key);
+              console.log('[live] tmux sendKey OK pane=%s key=%s', tmuxState.paneId, msg.key);
+            }
+          } catch (err) {
+            console.log('[live] tmux send FAIL: %s', err && err.message ? err.message : String(err));
+            send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
+          }
+          return;
+        }
+
         if (cmuxState.available && cmuxState.surfaceId) {
           const ok = await ensureCmuxConnected();
           if (!ok) {
@@ -947,22 +965,6 @@ function attachWS(server) {
           return;
         }
 
-        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
-          try {
-            if (type === 'send') {
-              await tmuxClient.sendText(tmuxState.socketPath, tmuxState.paneId, msg.text);
-              console.log('[live] tmux sendText OK pane=%s bytes=%d', tmuxState.paneId, Buffer.byteLength(msg.text, 'utf8'));
-            } else {
-              await tmuxClient.sendKey(tmuxState.socketPath, tmuxState.paneId, msg.key);
-              console.log('[live] tmux sendKey OK pane=%s key=%s', tmuxState.paneId, msg.key);
-            }
-          } catch (err) {
-            console.log('[live] tmux send FAIL: %s', err && err.message ? err.message : String(err));
-            send({ type: 'error', message: '전송 실패: ' + (err && err.message ? err.message : String(err)) });
-          }
-          return;
-        }
-
         console.log('[live] send rejected — no available transport');
         send({ type: 'error', message: '입력 forwarding이 비활성 상태입니다.' });
         return;
@@ -971,8 +973,16 @@ function attachWS(server) {
       if (type === 'capture_pane') {
         // Snapshot the visible TUI so the UI can show HITL prompts (plan
         // menus, permission asks) that never make it into the jsonl.
-        // Routing priority matches send: cmux > tmux. Reply once with
-        // {pane_snapshot, text|null, source|null, error?}.
+        // Routing priority matches send: exact tmux pane > cmux surface.
+        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
+          try {
+            const text = await tmuxClient.capturePane(tmuxState.socketPath, tmuxState.paneId, { lines: 80 });
+            send({ type: 'pane_snapshot', text: text || '', source: 'tmux' });
+          } catch (err) {
+            send({ type: 'pane_snapshot', text: null, source: null, error: err && err.message ? err.message : String(err) });
+          }
+          return;
+        }
         if (cmuxState.available && cmuxState.surfaceId) {
           const ok = await ensureCmuxConnected();
           if (!ok) {
@@ -982,15 +992,6 @@ function attachWS(server) {
           try {
             const text = await cmuxClient.readText(cmuxState.surfaceId);
             send({ type: 'pane_snapshot', text: text || '', source: 'cmux' });
-          } catch (err) {
-            send({ type: 'pane_snapshot', text: null, source: null, error: err && err.message ? err.message : String(err) });
-          }
-          return;
-        }
-        if (tmuxState.available && tmuxState.paneId && tmuxState.socketPath) {
-          try {
-            const text = await tmuxClient.capturePane(tmuxState.socketPath, tmuxState.paneId, { lines: 80 });
-            send({ type: 'pane_snapshot', text: text || '', source: 'tmux' });
           } catch (err) {
             send({ type: 'pane_snapshot', text: null, source: null, error: err && err.message ? err.message : String(err) });
           }
